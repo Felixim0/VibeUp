@@ -1,0 +1,15 @@
+{
+  "name": "vibe-up",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free offline first browser 3D editor.",
+  "scripts": {
+    "start": "node serve.mjs",
+    "check": "node --check *.js && node --check scripts/*.mjs && node --check serve.mjs && node --check tests/*.mjs && node --test tests/*.test.mjs && node scripts/check-pages-workflow.mjs",
+    "check:no-legacy-declaration": "rg -n '\\b\\x76ar\\s+' --glob '*.{js,mjs}' . && exit 1 || exit 0",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "build:pages": "node scripts/build-pages.mjs && node scripts/check-pages-artifact.mjs"
+  }
+}

@@ -1,0 +1,7 @@
+name: vibeupOpenCode
+channels:
+  - conda-forge
+dependencies:
+  - nodejs=24.21.0
+  - playwright=1.58.2
+  - ripgrep=14.1.1

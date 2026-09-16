@@ -1,0 +1,32 @@
+{
+  "name": "vibe-up",
+  "short_name": "vibe-up",
+  "description": "An offline-first browser 3D editor for editable models and STL workflows.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eef3f5",
+  "theme_color": "#eef3f5",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "./icons/vibe-up.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/vibe-up-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/vibe-up-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#eef3f5" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'"
+    />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/vibe-up.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/vibe-up-192.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>vibe-up | Offline 3D editor</title>
+  </head>
+  <body class="theme-light">
+    <div class="app-shell">
+      <header class="titlebar">
+        <div class="brand" aria-label="vibe-up">
+          <img src="./icons/vibe-up.svg" alt="" width="28" height="28" />
+          <span>vibe<span class="brand-accent">-up</span></span>
+        </div>
+        <div class="document-title" id="document-title">Untitled model</div>
+        <div class="titlebar-actions">
+          <button class="icon-button" id="install-button" type="button" hidden title="Install vibe-up">
+            Install
+          </button>
+          <button class="icon-button" id="help-button" type="button" title="Keyboard shortcuts and help">
+            ?
+          </button>
+        </div>
+      </header>
+
+      <nav class="menu-bar" aria-label="Application menus">
+        <button class="menu-button active" type="button" data-menu="file">File</button>
+        <button class="menu-button" type="button" data-menu="edit">Edit</button>
+        <button class="menu-button" type="button" data-menu="view">View</button>
+        <button class="menu-button" type="button" data-menu="camera">Camera</button>
+        <button class="menu-button" type="button" data-menu="draw">Draw</button>
+        <button class="menu-button" type="button" data-menu="tools">Tools</button>
+        <button class="menu-button" type="button" data-menu="solid">Solid</button>
+        <button class="menu-button" type="button" data-menu="window">Window</button>
+        <button class="menu-button" type="button" data-menu="appearance">Appearance</button>
+      </nav>
+
+      <section class="ribbon" aria-label="Tools">
+        <div class="ribbon-group" data-ribbon="file">
+          <button class="tool-button" type="button" data-action="new-project" title="New project (Ctrl+N)">
+            <span class="tool-icon">+</span><span>New</span>
+          </button>
+          <button class="tool-button" type="button" data-action="open-project" title="Open .vibeup project (Ctrl+O)">
+            <span class="tool-icon">&#128193;</span><span>Open</span>
+          </button>
+          <button class="tool-button" type="button" data-action="save-project" title="Save .vibeup project (Ctrl+S)">
+            <span class="tool-icon">&#128190;</span><span>Save</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button" type="button" data-action="import-stl" title="Import STL mesh">
+            <span class="tool-icon">&#8679;</span><span>Import STL</span>
+          </button>
+          <button class="tool-button" type="button" data-action="export-stl" title="Export printable STL mesh">
+            <span class="tool-icon">&#8681;</span><span>Export STL</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="edit">
+          <button class="tool-button" type="button" data-action="undo" title="Undo (Ctrl+Z)">
+            <span class="tool-icon">&#8617;</span><span>Undo</span>
+          </button>
+          <button class="tool-button" type="button" data-action="redo" title="Redo (Ctrl+Shift+Z)">
+            <span class="tool-icon">&#8618;</span><span>Redo</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button" type="button" data-action="delete-selection" title="Delete selected entities (Delete)">
+            <span class="tool-icon">&#9003;</span><span>Delete</span>
+          </button>
+          <button class="tool-button" type="button" data-action="duplicate-selection" title="Duplicate selected entities (Ctrl+D)">
+            <span class="tool-icon">&#10766;</span><span>Duplicate</span>
+          </button>
+          <button class="tool-button" type="button" data-action="make-group" title="Make group from selection">
+            <span class="tool-icon">&#8862;</span><span>Group</span>
+          </button>
+          <button class="tool-button" type="button" data-action="explode-group" title="Explode selected group">
+            <span class="tool-icon">&#8863;</span><span>Explode</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="view">
+          <button class="tool-button" type="button" data-action="toggle-sidebar" title="Show or hide trays">
+            <span class="tool-icon">&#9776;</span><span>Default Tray</span>
+          </button>
+          <button class="tool-button" type="button" data-action="toggle-grid" title="Toggle the drawing grid">
+            <span class="tool-icon">#</span><span>Grid</span>
+          </button>
+          <button class="tool-button" type="button" data-action="toggle-edges" title="Toggle mesh edges">
+            <span class="tool-icon">&#9638;</span><span>Edges</span>
+          </button>
+          <button class="tool-button" type="button" data-action="toggle-shadows" title="Toggle soft directional shading">
+            <span class="tool-icon">&#9728;</span><span>Shadows</span>
+          </button>
+          <button class="tool-button" type="button" data-action="toggle-projection" title="Toggle perspective / parallel projection">
+            <span class="tool-icon">&#9674;</span><span>Perspective</span>
+          </button>
+          <button class="tool-button" type="button" data-action="clear-section" title="Clear the active section cut">
+            <span class="tool-icon">&#10005;</span><span>Clear Section</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="camera">
+          <button class="tool-button tool-select" type="button" data-tool="orbit" title="Orbit camera (O)">
+            <span class="tool-icon">&#10227;</span><span>Orbit</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="pan" title="Pan camera (H)">
+            <span class="tool-icon">&#10021;</span><span>Pan</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="zoom" title="Zoom camera (Z)">
+            <span class="tool-icon">&#128269;</span><span>Zoom</span>
+          </button>
+          <button class="tool-button" type="button" data-action="zoom-extents" title="Fit visible model (Shift+Z)">
+            <span class="tool-icon">&#8864;</span><span>Zoom Extents</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button" type="button" data-action="view-top" title="Top view">
+            <span class="tool-icon">T</span><span>Top</span>
+          </button>
+          <button class="tool-button" type="button" data-action="view-front" title="Front view">
+            <span class="tool-icon">F</span><span>Front</span>
+          </button>
+          <button class="tool-button" type="button" data-action="view-right" title="Right view">
+            <span class="tool-icon">R</span><span>Right</span>
+          </button>
+          <button class="tool-button" type="button" data-action="view-iso" title="Iso view">
+            <span class="tool-icon">I</span><span>Iso</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="draw">
+          <button class="tool-button tool-select" type="button" data-tool="line" title="Line (L)">
+            <span class="tool-icon">&#9585;</span><span>Line</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="rectangle" title="Rectangle (R)">
+            <span class="tool-icon">&#9645;</span><span>Rectangle</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="circle" title="Circle (C)">
+            <span class="tool-icon">&#9675;</span><span>Circle</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="polygon" title="Polygon">
+            <span class="tool-icon">&#11040;</span><span>Polygon</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="arc" title="Three-point arc (A)">
+            <span class="tool-icon">&#9696;</span><span>Arc</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="freehand" title="Freehand">
+            <span class="tool-icon">&#8764;</span><span>Freehand</span>
+          </button>
+          <button class="tool-button" type="button" data-action="add-box" title="Add a dimensioned box">
+            <span class="tool-icon">&#9633;</span><span>Box</span>
+          </button>
+          <button class="tool-button" type="button" data-action="add-cylinder" title="Add a dimensioned cylinder">
+            <span class="tool-icon">&#9678;</span><span>Cylinder</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="tools">
+          <button class="tool-button tool-select active" type="button" data-tool="select" title="Select (Space)">
+            <span class="tool-icon">&#10148;</span><span>Select</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="eraser" title="Eraser (E)">
+            <span class="tool-icon">&#9003;</span><span>Eraser</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="paint" title="Paint Bucket (B)">
+            <span class="tool-icon">&#9632;</span><span>Paint</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="move" title="Move (M)">
+            <span class="tool-icon">&#8596;</span><span>Move</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="rotate" title="Rotate (Q)">
+            <span class="tool-icon">&#10226;</span><span>Rotate</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="scale" title="Scale (S)">
+            <span class="tool-icon">&#10556;</span><span>Scale</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="pushpull" title="Push/Pull (P)">
+            <span class="tool-icon">&#8597;</span><span>Push/Pull</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="offset" title="Offset (F)">
+            <span class="tool-icon">&#9654;</span><span>Offset</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="followme" title="Follow Me">
+            <span class="tool-icon">&#10132;</span><span>Follow Me</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button tool-select" type="button" data-tool="tape" title="Tape Measure (T)">
+            <span class="tool-icon">&#9552;</span><span>Tape</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="protractor" title="Protractor">
+            <span class="tool-icon">&#8736;</span><span>Protractor</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="dimension" title="Dimension (D)">
+            <span class="tool-icon">&#8596;</span><span>Dimension</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="text" title="Text label">
+            <span class="tool-icon">T</span><span>Text</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="axes" title="Place axes">
+            <span class="tool-icon">&#9582;</span><span>Axes</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="section" title="Section plane">
+            <span class="tool-icon">&#9473;</span><span>Section</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="solid">
+          <button class="tool-button" type="button" data-action="solid-subtract" title="Subtract selected cutter from selected target">
+            <span class="tool-icon">&#8722;</span><span>Subtract</span>
+          </button>
+          <button class="tool-button" type="button" data-action="reverse-faces" title="Reverse selected face winding">
+            <span class="tool-icon">&#8646;</span><span>Reverse Faces</span>
+          </button>
+          <button class="tool-button" type="button" data-action="print-check" title="Check selected or visible meshes for printability">
+            <span class="tool-icon">&#10003;</span><span>Print Check</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="window">
+          <button class="tool-button" type="button" data-action="show-entity-panel">
+            <span class="tool-icon">&#9638;</span><span>Entity Info</span>
+          </button>
+          <button class="tool-button" type="button" data-action="show-tags-panel">
+            <span class="tool-icon">&#9776;</span><span>Tags</span>
+          </button>
+          <button class="tool-button" type="button" data-action="show-materials-panel">
+            <span class="tool-icon">&#9670;</span><span>Materials</span>
+          </button>
+          <button class="tool-button" type="button" data-action="show-scenes-panel">
+            <span class="tool-icon">&#9636;</span><span>Scenes</span>
+          </button>
+          <button class="tool-button" type="button" data-action="show-outliner-panel">
+            <span class="tool-icon">&#9776;</span><span>Outliner</span>
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="appearance">
+          <button class="tool-button" type="button" data-action="open-appearance" title="Customize theme and editor colours">
+            <span class="tool-icon">&#9670;</span><span>Colours</span>
+          </button>
+          <button class="tool-button" type="button" data-action="toggle-theme" title="Switch light or dark theme">
+            <span class="tool-icon">&#9788;</span><span>Theme</span>
+          </button>
+          <button class="tool-button" type="button" data-action="reset-appearance" title="Reset the appearance settings">
+            <span class="tool-icon">&#8635;</span><span>Reset</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button" type="button" data-action="show-onboarding" title="Show the getting started guide">
+            <span class="tool-icon">&#8505;</span><span>Getting Started</span>
+          </button>
+        </div>
+      </section>
+
+      <main class="work-area">
+        <section class="viewport-panel" aria-label="3D workspace">
+          <canvas id="viewport" aria-label="3D editing viewport" tabindex="0"></canvas>
+          <div class="annotation-layer" id="annotation-layer" aria-hidden="true"></div>
+          <div class="viewport-hud" aria-hidden="true">
+            <div class="axis-indicator"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
+            <div class="view-cube" id="view-cube" title="Reset to isometric view">ISO</div>
+          </div>
+          <div class="viewport-hint" id="viewport-hint">Click an object to select it, then drag to move it.</div>
+          <div class="drop-overlay" id="drop-overlay" hidden>Drop an STL or .vibeup file to open it</div>
+        </section>
+
+        <aside class="sidebar" id="sidebar" aria-label="Model trays">
+          <div class="side-tabs" role="tablist" aria-label="Model trays">
+            <button class="side-tab active" type="button" role="tab" data-panel="entity-panel">Entity</button>
+            <button class="side-tab" type="button" role="tab" data-panel="tags-panel">Tags</button>
+            <button class="side-tab" type="button" role="tab" data-panel="materials-panel">Materials</button>
+            <button class="side-tab" type="button" role="tab" data-panel="scenes-panel">Scenes</button>
+            <button class="side-tab" type="button" role="tab" data-panel="outliner-panel">Outliner</button>
+          </div>
+
+          <section class="side-panel active" id="entity-panel" role="tabpanel">
+            <div class="panel-heading"><h2>Entity Info</h2></div>
+            <div id="entity-info" class="panel-body empty-state">Nothing selected</div>
+          </section>
+
+          <section class="side-panel" id="tags-panel" role="tabpanel">
+            <div class="panel-heading"><h2>Tags</h2><button id="add-tag-button" class="small-button" type="button">Add</button></div>
+            <div id="tags-list" class="panel-body"></div>
+          </section>
+
+          <section class="side-panel" id="materials-panel" role="tabpanel">
+            <div class="panel-heading"><h2>Materials</h2><button id="add-material-button" class="small-button" type="button">Add</button></div>
+            <div id="materials-list" class="panel-body material-grid"></div>
+          </section>
+
+          <section class="side-panel" id="scenes-panel" role="tabpanel">
+            <div class="panel-heading"><h2>Scenes</h2><button id="add-scene-button" class="small-button" type="button">Add</button></div>
+            <div id="scenes-list" class="panel-body"></div>
+          </section>
+
+          <section class="side-panel" id="outliner-panel" role="tabpanel">
+            <div class="panel-heading"><h2>Outliner</h2></div>
+            <div id="outliner-list" class="panel-body"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="status-bar">
+        <div class="status-message" id="status-message" aria-live="polite">Ready</div>
+        <div class="selection-status" id="selection-status">No selection</div>
+        <label class="measurements" for="measurements-input">
+          <span>Measurements</span>
+          <input id="measurements-input" autocomplete="off" spellcheck="false" placeholder="e.g. 120 mm or 120, 80 mm" />
+          <span class="unit-label">mm</span>
+        </label>
+      </footer>
+    </div>
+
+    <input id="project-input" type="file" accept=".vibeup,application/zip" hidden />
+    <input id="stl-input" type="file" accept=".stl,model/stl,application/sla" hidden />
+
+    <dialog id="modal-dialog" class="modal-dialog">
+      <form method="dialog" id="modal-form">
+        <div class="modal-heading">
+          <h2 id="modal-title">vibe-up</h2>
+          <button class="modal-close" value="cancel" aria-label="Close" type="submit">&#215;</button>
+        </div>
+        <div id="modal-content" class="modal-content"></div>
+        <div class="modal-actions" id="modal-actions"></div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
