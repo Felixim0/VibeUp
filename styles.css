@@ -74,6 +74,11 @@ body.theme-dark .modal-content input,
 body.theme-dark .modal-content select,
 body.theme-dark .modal-content textarea { border-color: #476473; background: #0d202b; color: #e7f2f5; }
 body.theme-dark .modal-actions button { border-color: #476473; background: #1b3341; color: #e7f2f5; }
+body.theme-dark .ribbon-utility-button { border-color: #3d5a66; background: #19303f; color: #cfe1e5; }
+body.theme-dark .floating-palette { border-color: #42616c; background: #162936; box-shadow: 0 16px 42px rgb(0 0 0 / 38%); }
+body.theme-dark .floating-palette-title { border-color: #365060; background: #203947; color: #d8eaed; }
+body.theme-dark .floating-palette-close { color: #b7ccd2; }
+body.theme-dark .floating-palette-close:hover { background: #294955; color: #89f5dc; }
 
 button,
 input {
@@ -91,6 +96,10 @@ button {
   height: 100%;
   min-width: 780px;
   background: #eef3f5;
+}
+
+.app-shell.palette-detached {
+  grid-template-rows: 42px 32px 42px minmax(0, 1fr) 36px;
 }
 
 .titlebar {
@@ -164,6 +173,9 @@ button {
 .menu-bar {
   display: flex;
   align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
   padding: 0 8px;
   border-bottom: 1px solid #c2d0d5;
   background: #f6f9fa;
@@ -187,6 +199,7 @@ button {
 .ribbon {
   display: flex;
   align-items: stretch;
+  position: relative;
   overflow-x: auto;
   border-bottom: 1px solid #c2d0d5;
   background: #ffffff;
@@ -204,6 +217,106 @@ button {
 .ribbon-group.hidden,
 .hidden {
   display: none !important;
+}
+
+.ribbon.detached .ribbon-group {
+  display: none;
+}
+
+.ribbon.detached {
+  min-height: 34px;
+}
+
+.ribbon.detached .ribbon-utility {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.ribbon-utility {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 8px 10px;
+}
+
+.ribbon-utility-button {
+  padding: 6px 9px;
+  border: 1px solid #b8c9ce;
+  border-radius: 5px;
+  background: #f7fafb;
+  color: #405762;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.ribbon-utility-button:hover {
+  border-color: #148a78;
+  background: #e7f4f2;
+}
+
+.floating-palette {
+  position: fixed;
+  z-index: 20;
+  width: 306px;
+  max-height: calc(100vh - 20px);
+  overflow: hidden auto;
+  border: 1px solid #9db3b9;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 42px rgb(31 58 68 / 25%);
+}
+
+.floating-palette[hidden] {
+  display: none;
+}
+
+.floating-palette-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 35px;
+  padding: 0 7px 0 11px;
+  border-bottom: 1px solid #d4e0e3;
+  background: #edf5f5;
+  color: #34515a;
+  cursor: grab;
+  font-size: 12px;
+  font-weight: 720;
+  user-select: none;
+}
+
+.floating-palette-title:active {
+  cursor: grabbing;
+}
+
+.floating-palette-close {
+  width: 25px;
+  height: 25px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #5d7179;
+  cursor: pointer;
+  font-size: 19px;
+}
+
+.floating-palette-close:hover {
+  background: #d9ebe8;
+  color: #086b5d;
+}
+
+.floating-palette-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: min(68vh, calc(100vh - 65px), 430px);
+  overflow: auto;
+  padding: 8px;
+}
+
+.floating-palette-tools .tool-button {
+  flex: 0 0 54px;
 }
 
 .ribbon-divider {
@@ -269,6 +382,25 @@ button {
   min-height: 0;
   overflow: hidden;
   background: #eef3f5;
+}
+
+.snap-indicator {
+  position: absolute;
+  z-index: 7;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #e18213;
+  border-radius: 50%;
+  background: #fff8d8;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 72%);
+  pointer-events: none;
+}
+
+.snap-indicator.inferred {
+  border-radius: 2px;
+  border-color: #1a8791;
+  background: #e6fbfd;
 }
 
 #viewport {

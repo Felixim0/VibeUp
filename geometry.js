@@ -5,7 +5,10 @@ import {
   distance3,
   dot3,
   mat4FromTransform,
+  mat4Identity,
+  mat4Invert,
   mat4Multiply,
+  mat4RotationAroundPoint,
   midpoint3,
   normalize3,
   scale3,
@@ -833,6 +836,35 @@ export const reverseMeshFaces = (entity) => {
     entity.indices[index + 2] = second;
   }
   return true;
+};
+
+export const rotateEntityAroundAxis = (project, entity, pivot, axis, angle) => {
+  if (entity.kind !== "mesh" && entity.kind !== "edge" && entity.kind !== "annotation") {
+    throw new Error("Rotate supports mesh and drawing entities.");
+  }
+  const parent = entity.parentId ? getEntity(project, entity.parentId) : null;
+  const parentWorldMatrix = parent ? entityWorldMatrix(project, parent) : mat4Identity();
+  const inverseParentMatrix = mat4Invert(parentWorldMatrix);
+  if (!inverseParentMatrix) {
+    throw new Error("The parent transform cannot be inverted for rotation.");
+  }
+  const worldRotation = mat4RotationAroundPoint(axis, angle, pivot);
+  const entityWorldTransform = entityWorldMatrix(project, entity);
+  const localRotation = mat4Multiply(inverseParentMatrix, mat4Multiply(worldRotation, entityWorldTransform));
+  bakeMatrixIntoEntity(entity, localRotation);
+  if (entity.kind === "mesh") {
+    entity.metadata = {
+      ...entity.metadata,
+      primitive: "rotated-mesh",
+      planar: false,
+      solid: entity.metadata?.solid === true
+    };
+    delete entity.metadata.profilePoints;
+    delete entity.metadata.profileNormal;
+    delete entity.metadata.dimensions;
+    delete entity.metadata.sweepVector;
+  }
+  return entity;
 };
 
 export const meshReport = (project, entities) => {

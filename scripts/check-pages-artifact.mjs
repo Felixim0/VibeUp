@@ -19,7 +19,17 @@ const required = [
   "sw.js",
   "icons/vibe-up.svg",
   "icons/vibe-up-192.png",
-  "icons/vibe-up-512.png"
+  "icons/vibe-up-512.png",
+  "icons/cursor-select.svg",
+  "icons/cursor-move.svg",
+  "icons/cursor-rotate.svg",
+  "icons/cursor-draw.svg",
+  "icons/cursor-measure.svg",
+  "icons/cursor-paint.svg",
+  "icons/cursor-erase.svg",
+  "icons/cursor-orbit.svg",
+  "icons/cursor-pan.svg",
+  "icons/cursor-zoom.svg"
 ];
 
 await Promise.all(required.map((path) => access(resolve(site, path))));
@@ -37,7 +47,7 @@ if (!index.includes('href="./manifest.webmanifest"') || !index.includes('src="./
 if (manifest.start_url !== "./" || manifest.scope !== "./") {
   throw new Error("The web manifest must remain relative for GitHub Pages project sites.");
 }
-if (!worker.includes('"./manifest.webmanifest"') || !worker.includes('"./icons/vibe-up-192.png"')) {
+if (!worker.includes('"./manifest.webmanifest"') || !worker.includes('"./icons/vibe-up-192.png"') || !worker.includes('"./icons/cursor-select.svg"')) {
   throw new Error("The service worker is missing required Pages PWA assets.");
 }
 if (icon192.size < 500 || icon512.size < 500) {

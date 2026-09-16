@@ -73,6 +73,14 @@ try {
   if (!state.webgl || state.canvasWidth <= 0) {
     throw new Error(`Editor did not initialize a WebGL canvas: ${JSON.stringify(state)}`);
   }
+  const activeMenu = await page.locator(".menu-button.active").textContent();
+  if (activeMenu !== "Home") {
+    throw new Error(`The default ribbon tab must be Home, received ${activeMenu}.`);
+  }
+  const defaultCursor = await page.locator("#viewport").evaluate((canvas) => canvas.style.cursor);
+  if (!defaultCursor.includes("cursor-select.svg")) {
+    throw new Error(`The default Select cursor was not applied: ${defaultCursor}`);
+  }
   const initialDropOverlay = await page.locator("#drop-overlay").isHidden();
   if (!initialDropOverlay) {
     throw new Error("Drop overlay is visible before a file drag begins.");
@@ -80,6 +88,14 @@ try {
   await page.locator("#modal-dialog").waitFor({ state: "visible" });
   await page.locator("#modal-dialog input[type='checkbox']").check();
   await page.getByRole("button", { name: "Start modeling", exact: true }).click();
+  await page.getByTitle("Detach tools into a floating palette").click();
+  if (await page.locator("#floating-palette").isHidden()) {
+    throw new Error("Detaching the ribbon did not open the floating palette.");
+  }
+  await page.locator("#attach-ribbon-button").click();
+  if (!await page.locator("#floating-palette").isHidden()) {
+    throw new Error("Attaching the ribbon did not close the floating palette.");
+  }
   await page.getByText("Appearance", { exact: true }).click();
   await page.getByTitle("Customize theme and editor colours").click();
   await page.locator("#modal-dialog input[type='color']").nth(3).fill("#ffcc00");
@@ -89,8 +105,8 @@ try {
   if (!appearanceStatus?.includes("appearance")) {
     throw new Error(`Appearance settings were not applied: ${appearanceStatus}`);
   }
-  await page.getByText("Draw", { exact: true }).click();
-  await page.getByTitle("Add a dimensioned box").click();
+  await page.getByText("Home", { exact: true }).click();
+  await page.getByTitle("Add a dimensioned box").first().click();
   await page.locator("#modal-dialog input").nth(0).fill("40");
   await page.locator("#modal-dialog input").nth(1).fill("30");
   await page.locator("#modal-dialog input").nth(2).fill("20");
@@ -104,7 +120,7 @@ try {
   if (modelState.outlinerRows < 2 || !modelState.selected?.includes("Box")) {
     throw new Error(`Box interaction failed: ${JSON.stringify(modelState)}`);
   }
-  await page.getByText("Tools", { exact: true }).click();
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
   await page.getByTitle("Select (Space)").click();
   const canvas = page.locator("#viewport");
   const canvasBox = await canvas.boundingBox();
@@ -124,6 +140,45 @@ try {
   if (!movedStatus?.includes("Moved selected entity")) {
     throw new Error(`Direct viewport movement did not commit: ${movedStatus}`);
   }
+  await page.getByText("Home", { exact: true }).click();
+  await page.getByTitle("Move (M)").first().click();
+  const moveCursor = await page.locator("#viewport").evaluate((canvas) => canvas.style.cursor);
+  if (!moveCursor.includes("cursor-move.svg")) {
+    throw new Error(`The Move cursor was not applied: ${moveCursor}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  const moveSelection = await page.locator("#selection-status").textContent();
+  if (!moveSelection?.includes("selected")) {
+    throw new Error(`Move tool did not select the clicked mesh: ${moveSelection}`);
+  }
+  await page.getByText("Home", { exact: true }).click();
+  await page.getByTitle("Rotate with protractor (Q)").click();
+  const rotateCursor = await page.locator("#viewport").evaluate((canvas) => canvas.style.cursor);
+  if (!rotateCursor.includes("cursor-rotate.svg")) {
+    throw new Error(`The Rotate cursor was not applied: ${rotateCursor}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  const protractorCentre = await page.locator("#status-message").textContent();
+  if (!protractorCentre?.includes("Protractor centre placed")) {
+    throw new Error(`Rotate tool did not place a protractor centre: ${protractorCentre}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.56, y: canvasBox.height * 0.5 } });
+  const protractorReference = await page.locator("#status-message").textContent();
+  if (!protractorReference?.includes("Rotate protractor ready")) {
+    throw new Error(`Rotate tool did not establish a reference: ${protractorReference}`);
+  }
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.52, canvasBox.y + canvasBox.height * 0.43, { steps: 3 });
+  const rotatePreview = await page.locator("#status-message").textContent();
+  if (!rotatePreview?.includes("Rotate:")) {
+    throw new Error(`Rotate tool did not preview an angle: ${rotatePreview}`);
+  }
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Line (L)").click();
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+  if (await page.locator("#snap-indicator").isHidden()) {
+    throw new Error("Snap indicator did not appear over a model surface.");
+  }
   await page.getByText("Appearance", { exact: true }).click();
   await page.getByTitle("Switch light or dark theme").click();
   if (!await page.locator("body").evaluate((body) => body.classList.contains("theme-dark"))) {
@@ -140,15 +195,15 @@ try {
     throw new Error("Editor keyboard shortcuts affected the model while a modal was open.");
   }
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByText("Draw", { exact: true }).click();
-  await page.getByTitle("Line (L)").click();
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Line (L)").click();
   await canvas.click({ position: { x: canvasBox.width * 0.45, y: canvasBox.height * 0.55 } });
   await page.getByText("File", { exact: true }).click();
   await page.getByTitle("New project (Ctrl+N)").click();
   await page.getByRole("button", { name: "Create New", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".outliner-row").length === 0, null, { timeout: 5000 });
-  await page.getByText("Tools", { exact: true }).click();
-  await page.getByTitle("Push/Pull (P)").click();
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
   await page.locator("#measurements-input").fill("25");
   await page.locator("#measurements-input").press("Enter");
   const resetStatus = await page.locator("#status-message").textContent();
@@ -156,8 +211,8 @@ try {
   if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked planar face")) {
     throw new Error(`New project did not clear transient drawing state: ${JSON.stringify({ resetStatus, resetRows })}`);
   }
-  await page.getByText("Draw", { exact: true }).click();
-  await page.getByTitle("Add a dimensioned box").click();
+  await page.getByText("Home", { exact: true }).click();
+  await page.getByTitle("Add a dimensioned box").first().click();
   await page.locator("#modal-dialog input").nth(0).fill("20");
   await page.locator("#modal-dialog input").nth(1).fill("20");
   await page.locator("#modal-dialog input").nth(2).fill("20");

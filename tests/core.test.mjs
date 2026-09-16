@@ -19,9 +19,10 @@ import {
   meshReport,
   meshWorldVertices,
   projectBounds,
-  reverseMeshFaces
+  reverseMeshFaces,
+  rotateEntityAroundAxis
 } from "../geometry.js";
-import { mat4FromTransform, mat4Identity, mat4Invert, mat4Multiply } from "../math.js";
+import { add3, dot3, mat4FromTransform, mat4Identity, mat4Invert, mat4Multiply, mat4RotationAroundPoint, normalize3, scale3, subtract3, transformPoint } from "../math.js";
 import { createBinaryStl, parseStl } from "../stl.js";
 
 test("ZIP archive round-trips project JSON", async () => {
@@ -40,6 +41,36 @@ test("matrix inversion returns an identity product", () => {
   for (let index = 0; index < 16; index += 1) {
     assert.ok(Math.abs(product[index] - identity[index]) < 0.00001);
   }
+});
+
+test("axis rotation keeps the protractor pivot fixed", () => {
+  const pivot = [10, 5, -3];
+  const rotation = mat4RotationAroundPoint([0, 0, 1], Math.PI / 2, pivot);
+  const rotatedPivot = transformPoint(rotation, pivot);
+  assert.ok(rotatedPivot.every((value, index) => Math.abs(value - pivot[index]) < 0.000001));
+  const rotatedPoint = transformPoint(rotation, [20, 5, -3]);
+  assert.ok(Math.abs(rotatedPoint[0] - 10) < 0.000001);
+  assert.ok(Math.abs(rotatedPoint[1] - 15) < 0.000001);
+  assert.ok(Math.abs(rotatedPoint[2] + 3) < 0.000001);
+});
+
+test("world-space rotation preserves an entity's existing transform", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(10, 10, 10));
+  box.transform.position = [20, 0, 0];
+  rotateEntityAroundAxis(project, box, [0, 0, 0], [0, 0, 1], Math.PI / 2);
+  const bounds = entityBounds(project, box);
+  assert.ok(Math.abs(bounds.center[0]) < 0.000001);
+  assert.ok(Math.abs(bounds.center[1] - 20) < 0.000001);
+});
+
+test("line inference projects points onto a locked direction", () => {
+  const origin = [4, -2, 7];
+  const direction = normalize3([2, 1, 0]);
+  const candidate = [21, 18, 7];
+  const inferred = add3(origin, scale3(direction, dot3(subtract3(candidate, origin), direction)));
+  const remainder = subtract3(subtract3(inferred, origin), scale3(direction, dot3(subtract3(inferred, origin), direction)));
+  assert.ok(Math.hypot(...remainder) < 0.000001);
 });
 
 test("ZIP reader rejects corrupt archive entries", async () => {

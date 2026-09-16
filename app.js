@@ -33,15 +33,18 @@ import {
   projectBounds,
   removeEntity,
   reverseMeshFaces,
+  rotateEntityAroundAxis,
   sweepProfile
 } from "./geometry.js";
 import {
   add3,
+  cross3,
   dot3,
   distance3,
   intersectRayPlane,
   intersectRayTriangle,
   midpoint3,
+  normalize3,
   projectPoint,
   rayFromScreen,
   scale3,
@@ -54,6 +57,33 @@ import { createBinaryStl, parseStl, stlTriangleCount } from "./stl.js";
 
 const MAX_HISTORY = 30;
 const LARGE_PICK_TRIANGLE_COUNT = 120000;
+const MAX_SNAP_MESH_TRIANGLES = 20000;
+const TOOL_CURSORS = {
+  select: "url('./icons/cursor-select.svg') 5 3, default",
+  move: "url('./icons/cursor-move.svg') 16 16, move",
+  rotate: "url('./icons/cursor-rotate.svg') 16 16, crosshair",
+  line: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  rectangle: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  circle: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  polygon: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  arc: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  freehand: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  pushpull: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  offset: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  followme: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  tape: "url('./icons/cursor-measure.svg') 16 16, crosshair",
+  protractor: "url('./icons/cursor-measure.svg') 16 16, crosshair",
+  dimension: "url('./icons/cursor-measure.svg') 16 16, crosshair",
+  text: "text",
+  axes: "crosshair",
+  section: "crosshair",
+  eraser: "url('./icons/cursor-erase.svg') 8 22, crosshair",
+  paint: "url('./icons/cursor-paint.svg') 16 21, crosshair",
+  orbit: "url('./icons/cursor-orbit.svg') 16 16, grab",
+  pan: "url('./icons/cursor-pan.svg') 16 16, grab",
+  zoom: "url('./icons/cursor-zoom.svg') 13 13, zoom-in",
+  scale: "nwse-resize"
+};
 const TOOL_HINTS = {
   select: "Click an entity to select it. Shift-click adds or removes entities from the selection.",
   line: "Click a start point, then click an end point. Type a length in Measurements for an exact line.",
@@ -65,7 +95,7 @@ const TOOL_HINTS = {
   eraser: "Click an entity to erase it.",
   paint: "Choose a material in the Materials tray, then click a mesh to paint it.",
   move: "Select entities, then drag on the ground plane. Measurements accepts X, Y, Z translation.",
-  rotate: "Select entities, then drag left or right to rotate around the blue axis. Measurements accepts degrees.",
+  rotate: "Select an object, then click a face or edge to place a protractor. Move the pointer to set its rotation angle; click to apply.",
   scale: "Select entities, then drag left or right to scale uniformly. Measurements accepts one factor or X, Y, Z.",
   pushpull: "Select a planar face, then drag vertically or enter an exact height in Measurements.",
   offset: "Select a planar face, then drag or enter an exact offset distance in Measurements.",
@@ -82,6 +112,7 @@ const TOOL_HINTS = {
 };
 
 const elements = {
+  appShell: document.querySelector("#app-shell"),
   canvas: document.querySelector("#viewport"),
   annotationLayer: document.querySelector("#annotation-layer"),
   viewportHint: document.querySelector("#viewport-hint"),
@@ -104,7 +135,14 @@ const elements = {
   modalContent: document.querySelector("#modal-content"),
   modalActions: document.querySelector("#modal-actions"),
   install: document.querySelector("#install-button"),
-  viewCube: document.querySelector("#view-cube")
+  viewCube: document.querySelector("#view-cube"),
+  ribbon: document.querySelector("#ribbon"),
+  detachRibbon: document.querySelector("#detach-ribbon-button"),
+  attachRibbon: document.querySelector("#attach-ribbon-button"),
+  floatingPalette: document.querySelector("#floating-palette"),
+  floatingPaletteTitle: document.querySelector("#floating-palette-title"),
+  floatingPaletteTools: document.querySelector("#floating-palette-tools"),
+  snapIndicator: document.querySelector("#snap-indicator")
 };
 
 const app = {
@@ -127,7 +165,11 @@ const app = {
   fileHandle: null,
   openAlreadyConfirmed: false,
   installPrompt: null,
-  activeRibbon: "file",
+  activeRibbon: "home",
+  paletteDetached: false,
+  paletteOffset: { x: 26, y: 148 },
+  snap: null,
+  inference: null,
   preferences: {
     onboardingDismissed: false
   }
@@ -160,8 +202,13 @@ const loadPreferences = () => {
   try {
     const preferences = JSON.parse(localStorage.getItem(PREFERENCE_KEY) ?? "{}");
     app.preferences.onboardingDismissed = preferences.onboardingDismissed === true;
+    app.preferences.paletteDetached = preferences.paletteDetached === true;
+    if (Number.isFinite(preferences.paletteX) && Number.isFinite(preferences.paletteY)) {
+      app.paletteOffset = { x: preferences.paletteX, y: preferences.paletteY };
+    }
   } catch {
     app.preferences.onboardingDismissed = false;
+    app.preferences.paletteDetached = false;
   }
 };
 
@@ -307,11 +354,15 @@ const resetTransientToolState = () => {
   elements.measurements.value = "";
 };
 
+const setViewportCursor = (cursor = TOOL_CURSORS[app.activeTool] ?? "default") => {
+  elements.canvas.style.cursor = cursor;
+};
+
 const refreshToolPresentation = () => {
   const tool = app.activeTool;
   document.querySelectorAll(".tool-select").forEach((button) => button.classList.toggle("active", button.dataset.tool === tool));
   elements.canvas.dataset.tool = tool;
-  elements.canvas.style.cursor = ["orbit", "pan", "zoom"].includes(tool) ? "grab" : tool === "select" ? "default" : "crosshair";
+  setViewportCursor();
   elements.viewportHint.textContent = TOOL_HINTS[tool] ?? "Choose a point in the workspace.";
 };
 
@@ -457,6 +508,152 @@ const pointOnPlane = (event, planePoint, planeNormal) => {
   }
   const point = intersectRayPlane(ray, planePoint, planeNormal);
   return point ? snapPointOnSurface(point, { point: planePoint, normal: planeNormal }) : null;
+};
+
+const snapTolerance = () => Math.max(1, app.camera.distance * 0.018);
+
+const nearestPointOnSegment = (point, start, end) => {
+  const segment = subtract3(end, start);
+  const lengthSquared = dot3(segment, segment);
+  if (lengthSquared < 0.000001) {
+    return { point: start, amount: 0 };
+  }
+  const amount = Math.max(0, Math.min(1, dot3(subtract3(point, start), segment) / lengthSquared));
+  return { point: add3(start, scale3(segment, amount)), amount };
+};
+
+const surfaceForPoint = (point, fallback = drawingSurface()) => ({ point: Array.from(point), normal: Array.from(fallback.normal) });
+
+const pointOnInfiniteLine = (point, origin, direction) => add3(origin, scale3(direction, dot3(subtract3(point, origin), direction)));
+
+const lockInference = () => {
+  if (!app.snap || !drawingTools.has(app.activeTool)) {
+    return;
+  }
+  if (app.snap.line) {
+    const direction = normalize3(subtract3(app.snap.line.end, app.snap.line.start));
+    if (distance3(direction, [0, 0, 0]) > 0.000001) {
+      app.inference = {
+        kind: "line",
+        point: Array.from(app.snap.point),
+        direction,
+        surface: app.snap.surface,
+        label: "locked on line"
+      };
+      setStatus("Inference locked to line. Release Control to unlock.");
+      return;
+    }
+  }
+  const origin = app.pending?.points?.[0];
+  if (app.snap.kind === "face" && app.snap.surface) {
+    const { tangent, bitangent } = planeBasis(app.snap.surface.normal);
+    app.inference = {
+      kind: "line",
+      point: Array.from(app.snap.point),
+      direction: Math.abs(dot3(app.camera.getDirection(), tangent)) > Math.abs(dot3(app.camera.getDirection(), bitangent)) ? tangent : bitangent,
+      surface: app.snap.surface,
+      label: "locked face axis"
+    };
+    setStatus("Inference locked on the face axis. Release Control to unlock.");
+    return;
+  }
+  if (origin && distance3(origin, app.snap.point) > 0.000001) {
+    app.inference = {
+      kind: "line",
+      point: Array.from(origin),
+      direction: normalize3(subtract3(app.snap.point, origin)),
+      surface: app.pending.surface,
+      label: "locked direction"
+    };
+    setStatus("Inference direction locked. Release Control to unlock.");
+  }
+};
+
+const unlockInference = () => {
+  if (app.inference) {
+    app.inference = null;
+    setStatus("Inference unlocked.");
+  }
+};
+
+const closestSnap = (rawPoint, surface, options = {}) => {
+  const tolerance = options.tolerance ?? snapTolerance();
+  let best = null;
+  const consider = (point, kind, label, distance = distance3(rawPoint, point), line = null) => {
+    if (Math.abs(dot3(subtract3(point, surface.point), surface.normal)) > tolerance * 0.05) {
+      return;
+    }
+    if (distance <= tolerance && (!best || distance < best.distance)) {
+      best = { point, kind, label, distance, line, surface: surfaceForPoint(point, surface) };
+    }
+  };
+
+  for (const entity of allRenderableEntities(app.project)) {
+    if (entity.kind === "mesh") {
+      if (entity.indices.length / 3 > MAX_SNAP_MESH_TRIANGLES) {
+        continue;
+      }
+      const vertices = meshWorldVertices(app.project, entity);
+      for (let index = 0; index < vertices.length; index += 3) {
+        consider([vertices[index], vertices[index + 1], vertices[index + 2]], "vertex", "endpoint");
+      }
+      for (let index = 0; index < entity.indices.length; index += 3) {
+        const triangle = [entity.indices[index], entity.indices[index + 1], entity.indices[index + 2]];
+        for (let edge = 0; edge < 3; edge += 1) {
+          const firstIndex = triangle[edge] * 3;
+          const secondIndex = triangle[(edge + 1) % 3] * 3;
+          const start = [vertices[firstIndex], vertices[firstIndex + 1], vertices[firstIndex + 2]];
+          const end = [vertices[secondIndex], vertices[secondIndex + 1], vertices[secondIndex + 2]];
+          const nearest = nearestPointOnSegment(rawPoint, start, end);
+          consider(nearest.point, "edge", "on edge", undefined, { start, end });
+          consider(midpoint3(start, end), "midpoint", "midpoint");
+        }
+      }
+    } else if (entity.kind === "edge" || entity.kind === "annotation") {
+      const points = lineWorldPoints(app.project, entity);
+      for (let index = 0; index < points.length - 3; index += 3) {
+        const start = [points[index], points[index + 1], points[index + 2]];
+        const end = [points[index + 3], points[index + 4], points[index + 5]];
+        consider(start, "endpoint", "endpoint");
+        consider(end, "endpoint", "endpoint");
+        const nearest = nearestPointOnSegment(rawPoint, start, end);
+        consider(nearest.point, "edge", "on edge", undefined, { start, end });
+        consider(midpoint3(start, end), "midpoint", "midpoint");
+      }
+    }
+  }
+  return best;
+};
+
+const resolvedSnapPoint = (event, rawPoint, surface, options = {}) => {
+  if (event.ctrlKey && app.inference?.kind === "line") {
+    return {
+      point: pointOnInfiniteLine(rawPoint, app.inference.point, app.inference.direction),
+      kind: "inference",
+      label: app.inference.label,
+      surface: app.inference.surface
+    };
+  }
+  return closestSnap(rawPoint, surface, options) ?? { point: rawPoint, kind: "grid", label: "grid", surface };
+};
+
+const updateSnapIndicator = () => {
+  const snap = app.snap;
+  if (!snap || !app.renderMatrices) {
+    elements.snapIndicator.hidden = true;
+    return;
+  }
+  const viewport = app.renderer.getViewport();
+  const projected = projectPoint(snap.point, viewport.width, viewport.height, app.renderMatrices.projection, app.renderMatrices.view);
+  if (!projected || projected[2] < -1 || projected[2] > 1) {
+    elements.snapIndicator.hidden = true;
+    return;
+  }
+  elements.snapIndicator.hidden = false;
+  elements.snapIndicator.classList.toggle("inferred", snap.kind === "inference");
+  elements.snapIndicator.style.left = `${projected[0] / app.renderer.pixelRatio}px`;
+  elements.snapIndicator.style.top = `${projected[1] / app.renderer.pixelRatio}px`;
+  elements.snapIndicator.title = snap.label;
 };
 
 const drawingSurface = () => {
@@ -615,6 +812,37 @@ const currentPreview = () => {
   if (app.interaction?.kind === "freehand") {
     return { points: app.interaction.points, color: [0.95, 0.83, 0.37, 0.95] };
   }
+  if (app.pending?.tool === "rotate") {
+    const guide = app.pending;
+    const radius = Math.max(20, app.camera.distance * 0.13);
+    const { tangent, bitangent } = planeBasis(guide.axis);
+    const points = [];
+    for (let index = 0; index <= 40; index += 1) {
+      const angle = (index / 40) * Math.PI * 2;
+      points.push(...add3(guide.pivot, add3(scale3(tangent, Math.cos(angle) * radius), scale3(bitangent, Math.sin(angle) * radius))));
+    }
+    return { points, color: [0.92, 0.47, 0.08, 0.76], pointsMode: true };
+  }
+  if (app.interaction?.kind === "rotate-guide") {
+    const guide = app.interaction;
+    const radius = Math.max(20, app.camera.distance * 0.13);
+    const { tangent, bitangent } = planeBasis(guide.axis);
+    const points = [];
+    for (let index = 0; index <= 40; index += 1) {
+      const angle = (index / 40) * Math.PI * 2;
+      points.push(...add3(guide.pivot, add3(scale3(tangent, Math.cos(angle) * radius), scale3(bitangent, Math.sin(angle) * radius))));
+    }
+    const referenceEnd = add3(guide.pivot, scale3(guide.reference, radius));
+    const currentDirection = guide.angle === 0
+      ? guide.reference
+      : add3(scale3(guide.reference, Math.cos(guide.angle)), scale3(cross3(guide.axis, guide.reference), Math.sin(guide.angle)));
+    const currentEnd = add3(guide.pivot, scale3(currentDirection, radius));
+    return {
+      points: [...points, ...guide.pivot, ...referenceEnd, ...guide.pivot, ...currentEnd],
+      color: [0.92, 0.47, 0.08, 0.96],
+      pointsMode: true
+    };
+  }
   if (!app.pending || !app.hoverPoint) {
     return null;
   }
@@ -659,6 +887,31 @@ const currentPreview = () => {
   return null;
 };
 
+const snapHoverPoint = (event) => {
+  if (app.activeTool === "select") {
+    const hit = pickEntity(event);
+    if (hit?.point) {
+      app.snap = { point: hit.point, kind: "face", label: "select object", surface: drawingSurfaceFromHit(hit) };
+    } else {
+      app.snap = null;
+    }
+    return;
+  }
+  if (app.activeTool === "move") {
+    const hit = pickEntity(event);
+    if (hit?.point) {
+      app.snap = { point: hit.point, kind: "face", label: "move object", surface: drawingSurfaceFromHit(hit) };
+    } else {
+      app.snap = null;
+    }
+    return;
+  }
+  if (drawingTools.has(app.activeTool)) {
+    const drawing = drawingPointForEvent(event);
+    app.hoverPoint = drawing?.point ?? null;
+  }
+};
+
 const requestRender = () => {
   if (app.renderScheduled) {
     return;
@@ -669,6 +922,7 @@ const requestRender = () => {
     const preview = currentPreview();
     app.renderMatrices = app.renderer.render(app.project, app.camera, app.selection, preview);
     renderAnnotations();
+    updateSnapIndicator();
   });
 };
 
@@ -705,13 +959,109 @@ const selectRibbon = (name) => {
   document.querySelectorAll(".ribbon-group").forEach((group) => group.classList.toggle("hidden", group.dataset.ribbon !== name));
 };
 
+const positionFloatingPalette = () => {
+  const margin = 10;
+  const maximumX = Math.max(margin, window.innerWidth - 326);
+  const paletteHeight = elements.floatingPalette.offsetHeight || Math.min(467, window.innerHeight - margin * 2);
+  const maximumY = Math.max(margin, window.innerHeight - paletteHeight - margin);
+  app.paletteOffset.x = Math.min(Math.max(margin, app.paletteOffset.x), maximumX);
+  app.paletteOffset.y = Math.min(Math.max(margin, app.paletteOffset.y), maximumY);
+  elements.floatingPalette.style.left = `${app.paletteOffset.x}px`;
+  elements.floatingPalette.style.top = `${app.paletteOffset.y}px`;
+};
+
+const populateFloatingPalette = () => {
+  const fragment = document.createDocumentFragment();
+  const seen = new Set();
+  for (const source of elements.ribbon.querySelectorAll(".tool-button")) {
+    const key = source.dataset.tool ? `tool:${source.dataset.tool}` : `action:${source.dataset.action}`;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const button = source.cloneNode(true);
+    button.removeAttribute("id");
+    button.addEventListener("click", () => {
+      if (button.dataset.tool) {
+        setTool(button.dataset.tool);
+      } else if (button.dataset.action) {
+        executeAction(button.dataset.action);
+      }
+    });
+    fragment.append(button);
+  }
+  elements.floatingPaletteTools.replaceChildren(fragment);
+};
+
+const setPaletteDetached = (detached) => {
+  app.paletteDetached = detached;
+  elements.appShell.classList.toggle("palette-detached", detached);
+  elements.ribbon.classList.toggle("detached", detached);
+  elements.floatingPalette.hidden = !detached;
+  elements.detachRibbon.textContent = detached ? "Attach tools" : "Detach tools";
+  elements.detachRibbon.title = detached ? "Attach tools to the ribbon" : "Detach tools into a floating palette";
+  if (detached) {
+    populateFloatingPalette();
+    positionFloatingPalette();
+  } else {
+    elements.floatingPaletteTools.replaceChildren();
+  }
+  app.preferences.paletteDetached = detached;
+  app.preferences.paletteX = app.paletteOffset.x;
+  app.preferences.paletteY = app.paletteOffset.y;
+  savePreferences();
+  refreshToolPresentation();
+};
+
+const togglePaletteDetached = () => setPaletteDetached(!app.paletteDetached);
+
+const bindFloatingPalette = () => {
+  let drag = null;
+  elements.detachRibbon.addEventListener("click", togglePaletteDetached);
+  elements.attachRibbon.addEventListener("click", () => setPaletteDetached(false));
+  elements.floatingPaletteTitle.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) {
+      return;
+    }
+    drag = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - app.paletteOffset.x,
+      offsetY: event.clientY - app.paletteOffset.y
+    };
+    elements.floatingPaletteTitle.setPointerCapture(event.pointerId);
+  });
+  elements.floatingPaletteTitle.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    app.paletteOffset = { x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY };
+    positionFloatingPalette();
+  });
+  const finishDrag = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    drag = null;
+    app.preferences.paletteX = app.paletteOffset.x;
+    app.preferences.paletteY = app.paletteOffset.y;
+    savePreferences();
+  };
+  elements.floatingPaletteTitle.addEventListener("pointerup", finishDrag);
+  elements.floatingPaletteTitle.addEventListener("pointercancel", finishDrag);
+};
+
 const activateSidePanel = (panelId) => {
   document.querySelectorAll(".side-tab").forEach((button) => button.classList.toggle("active", button.dataset.panel === panelId));
   document.querySelectorAll(".side-panel").forEach((panel) => panel.classList.toggle("active", panel.id === panelId));
 };
 
 const setTool = (tool) => {
+  if (app.interaction?.kind === "rotate-guide") {
+    restoreSnapshot(app.interaction.before);
+  }
   app.activeTool = tool;
+  app.inference = null;
+  app.snap = null;
   resetTransientToolState();
   refreshToolPresentation();
   setStatus(`${tool[0].toUpperCase()}${tool.slice(1)} tool active.`);
@@ -2111,17 +2461,33 @@ const drawingSurfaceFromHit = (hit) => ({
 
 const drawingPointForEvent = (event) => {
   if (app.pending?.surface) {
-    const point = pointOnPlane(event, app.pending.surface.point, app.pending.surface.normal);
-    return point ? { point, surface: app.pending.surface } : null;
+    const rawPoint = pointOnPlane(event, app.pending.surface.point, app.pending.surface.normal);
+    if (!rawPoint) {
+      return null;
+    }
+    const snap = resolvedSnapPoint(event, rawPoint, app.pending.surface);
+    app.snap = snap;
+    return { point: snap.point, surface: app.pending.surface };
   }
   const hit = pickEntity(event);
   if (hit?.entity.kind === "mesh" && hit.point && hit.normal) {
     const surface = drawingSurfaceFromHit(hit);
-    return { point: snapPointOnSurface(hit.point, surface), surface };
+    const snap = resolvedSnapPoint(event, snapPointOnSurface(hit.point, surface), surface);
+    app.snap = snap;
+    return { point: snap.point, surface };
   }
   const surface = { point: [0, 0, 0], normal: [0, 0, 1] };
-  const point = pointOnPlane(event, surface.point, surface.normal);
-  return point ? { point, surface } : null;
+  const rawPoint = pointOnPlane(event, surface.point, surface.normal);
+  if (!rawPoint) {
+    return null;
+  }
+  const snap = resolvedSnapPoint(event, rawPoint, surface);
+  app.snap = snap;
+  return { point: snap.point, surface };
+};
+
+const setInferenceFromPoint = (point, surface) => {
+  app.inference = { point: Array.from(point), surface: { point: Array.from(surface.point), normal: Array.from(surface.normal) } };
 };
 
 const handleDrawingClick = (event, point, surface = null) => {
@@ -2129,12 +2495,14 @@ const handleDrawingClick = (event, point, surface = null) => {
   if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "polygon" || tool === "tape" || tool === "dimension" || tool === "protractor" || tool === "arc") {
     if (!app.pending) {
       app.pending = { tool, points: [point], surface };
+      setInferenceFromPoint(point, surface);
       setStatus("First point set. Choose the next point or type an exact measurement.");
       requestRender();
       return;
     }
     if (app.pending.tool !== tool) {
       app.pending = { tool, points: [point], surface };
+      setInferenceFromPoint(point, surface);
       requestRender();
       return;
     }
@@ -2147,6 +2515,7 @@ const handleDrawingClick = (event, point, surface = null) => {
         setStatus("Drew line on the active surface.");
       }
       app.pending = null;
+      app.inference = null;
     } else if (tool === "rectangle") {
       const entity = createRectangle(points[0], point, activeSurface);
       if (entity) {
@@ -2154,6 +2523,7 @@ const handleDrawingClick = (event, point, surface = null) => {
         setStatus("Drew rectangle on the active surface.");
       }
       app.pending = null;
+      app.inference = null;
     } else if (tool === "circle") {
       const entity = createCircle(points[0], point, 32, "Circle", activeSurface);
       if (entity) {
@@ -2161,6 +2531,7 @@ const handleDrawingClick = (event, point, surface = null) => {
         setStatus("Drew circle on the active surface.");
       }
       app.pending = null;
+      app.inference = null;
     } else if (tool === "polygon") {
       const entity = createPolygon(points[0], point, 6, activeSurface);
       if (entity) {
@@ -2168,6 +2539,7 @@ const handleDrawingClick = (event, point, surface = null) => {
         setStatus("Drew polygon on the active surface.");
       }
       app.pending = null;
+      app.inference = null;
     } else if (tool === "tape" || tool === "dimension") {
       const entity = createMeasurement(tool, points[0], point);
       if (entity) {
@@ -2279,8 +2651,67 @@ const beginDirectMove = (event, hit) => {
     entities: entities.map((entity) => entity.id),
     moved: false
   };
+  app.snap = { point: startPoint ?? hit.point, kind: "face", label: "move plane", surface };
   elements.canvas.setPointerCapture(event.pointerId);
-  elements.canvas.style.cursor = "grabbing";
+  setViewportCursor("grabbing");
+  return true;
+};
+
+const startRotateProtractor = (event) => {
+  let entity = currentSelection().find((candidate) => candidate.kind === "mesh" && !candidate.locked);
+  const hit = pickEntity(event);
+  if (!entity && hit?.entity.kind === "mesh" && !hit.entity.locked) {
+    entity = hit.entity;
+    setSelection([entity.id], event.shiftKey ? "add" : "replace");
+  }
+  if (!entity) {
+    setStatus("Select an unlocked mesh before placing a rotate protractor.", "warning");
+    return false;
+  }
+  if (!hit?.point) {
+    setStatus("Click a model face or edge to place the rotate protractor centre.", "warning");
+    return false;
+  }
+  const axis = normalize3(hit.normal ?? [0, 0, 1]);
+  const pivot = Array.from(hit.point);
+  app.pending = {
+    tool: "rotate",
+    entityId: entity.id,
+    pivot,
+    axis,
+    surface: { point: pivot, normal: axis }
+  };
+  app.snap = { point: pivot, kind: "inference", label: "protractor centre", surface: app.pending.surface };
+  setStatus("Protractor centre placed. Click a second point to set the rotate reference.");
+  requestRender();
+  return true;
+};
+
+const setRotateReference = (event) => {
+  if (!app.pending || app.pending.tool !== "rotate") {
+    return false;
+  }
+  const rawPoint = pointOnPlane(event, app.pending.pivot, app.pending.axis);
+  const snap = rawPoint ? resolvedSnapPoint(event, rawPoint, app.pending.surface) : null;
+  const point = snap?.point ?? rawPoint;
+  if (!point || distance3(point, app.pending.pivot) < 0.001) {
+    setStatus("Choose a point away from the protractor centre to set the rotate reference.", "warning");
+    return false;
+  }
+  const reference = normalize3(subtract3(point, app.pending.pivot));
+  app.interaction = {
+    kind: "rotate-guide",
+    entityId: app.pending.entityId,
+    pivot: app.pending.pivot,
+    axis: app.pending.axis,
+    reference,
+    angle: 0,
+    before: snapshot()
+  };
+  app.pending = null;
+  app.snap = { point, kind: snap?.kind ?? "inference", label: snap?.label ?? "rotate reference", surface: { point: app.interaction.pivot, normal: app.interaction.axis } };
+  setStatus("Rotate protractor ready. Move the pointer to preview rotation, then click to apply.");
+  requestRender();
   return true;
 };
 
@@ -2289,20 +2720,52 @@ const pointerMovement = (current, start) => Math.hypot(current.x - start.x, curr
 const handlePointerDown = (event) => {
   elements.canvas.focus({ preventScroll: true });
   if (event.button === 2 || event.altKey) {
+    if (app.interaction?.kind === "rotate-guide") {
+      restoreSnapshot(app.interaction.before);
+      app.interaction = null;
+      app.snap = null;
+    }
     const pointer = getPointer(event);
     app.interaction = { kind: "orbit", pointerId: event.pointerId, lastPointer: pointer };
     elements.canvas.setPointerCapture(event.pointerId);
-    elements.canvas.style.cursor = "grabbing";
+    setViewportCursor("grabbing");
     return;
   }
   if (event.button === 1) {
+    if (app.interaction?.kind === "rotate-guide") {
+      restoreSnapshot(app.interaction.before);
+      app.interaction = null;
+      app.snap = null;
+    }
     const pointer = getPointer(event);
     app.interaction = { kind: "pan", pointerId: event.pointerId, lastPointer: pointer };
     elements.canvas.setPointerCapture(event.pointerId);
-    elements.canvas.style.cursor = "grabbing";
+    setViewportCursor("grabbing");
     return;
   }
   if (event.button !== 0) {
+    return;
+  }
+  if (app.interaction?.kind === "rotate-guide" && app.activeTool !== "rotate") {
+    restoreSnapshot(app.interaction.before);
+    app.interaction = null;
+  }
+  if (app.activeTool === "rotate" && app.interaction?.kind === "rotate-guide") {
+    const rotating = app.interaction;
+    if (Math.abs(rotating.angle) < 0.0001) {
+      setStatus("Move the pointer away from the rotate reference before applying.", "warning");
+      return;
+    }
+    if (commitSnapshot("Rotate selection", rotating.before)) {
+      setStatus(`Applied rotation of ${formatAngle(rotating.angle)}.`);
+    }
+    app.interaction = null;
+    app.snap = null;
+    requestRender();
+    return;
+  }
+  if (app.activeTool === "rotate" && app.pending?.tool === "rotate") {
+    setRotateReference(event);
     return;
   }
   const tool = app.activeTool;
@@ -2310,7 +2773,7 @@ const handlePointerDown = (event) => {
     const pointer = getPointer(event);
     app.interaction = { kind: tool, pointerId: event.pointerId, lastPointer: pointer };
     elements.canvas.setPointerCapture(event.pointerId);
-    elements.canvas.style.cursor = "grabbing";
+    setViewportCursor("grabbing");
     return;
   }
   if (tool === "freehand") {
@@ -2319,12 +2782,28 @@ const handlePointerDown = (event) => {
       return;
     }
     app.pending = { tool, points: [drawing.point], surface: drawing.surface };
+    setInferenceFromPoint(drawing.point, drawing.surface);
     app.interaction = { kind: "freehand", pointerId: event.pointerId, points: [...drawing.point], before: snapshot(), surface: drawing.surface };
     elements.canvas.setPointerCapture(event.pointerId);
     requestRender();
     return;
   }
   if (tool === "move" || tool === "rotate" || tool === "scale") {
+    if (tool === "rotate") {
+      startRotateProtractor(event);
+      return;
+    }
+    if (tool === "move") {
+      const hit = pickEntity(event);
+      if (!hit) {
+        if (!event.shiftKey) {
+          clearSelection();
+        }
+        return;
+      }
+      beginDirectMove(event, hit);
+      return;
+    }
     beginTransform(tool, event);
     return;
   }
@@ -2400,16 +2879,34 @@ const handlePointerMove = (event) => {
   const pointer = getPointer(event);
   const interaction = app.interaction;
   if (!interaction) {
-    if (drawingTools.has(app.activeTool)) {
-      const drawing = drawingPointForEvent(event);
-      if (drawing) {
-        app.hoverPoint = drawing.point;
-      }
-      requestRender();
-    }
+    snapHoverPoint(event);
+    requestRender();
     return;
   }
-  if (interaction.pointerId !== event.pointerId) {
+  if (interaction.pointerId !== undefined && interaction.pointerId !== event.pointerId) {
+    return;
+  }
+  if (interaction.kind === "rotate-guide") {
+    const point = pointOnPlane(event, interaction.pivot, interaction.axis);
+    if (!point) {
+      return;
+    }
+    const direction = subtract3(point, interaction.pivot);
+    if (distance3(direction, [0, 0, 0]) < 0.001) {
+      return;
+    }
+    const angle = signedAngleAroundAxis(interaction.reference, direction, interaction.axis);
+    interaction.angle = angle;
+    app.snap = { point, kind: "inference", label: "rotate reference", surface: { point: interaction.pivot, normal: interaction.axis } };
+    app.project = structuredClone(interaction.before.project);
+    app.camera.restore(interaction.before.camera);
+    const rotatingEntity = getEntity(app.project, interaction.entityId);
+    if (rotatingEntity) {
+      rotateEntityAroundAxis(app.project, rotatingEntity, interaction.pivot, interaction.axis, angle);
+      app.renderer.invalidate();
+    }
+    setStatus(`Rotate: ${formatAngle(angle)}. Click to apply, Escape to cancel.`);
+    requestRender();
     return;
   }
   if (interaction.kind === "orbit") {
@@ -2431,7 +2928,7 @@ const handlePointerMove = (event) => {
     return;
   }
   if (interaction.kind === "freehand") {
-    const point = pointOnDrawingPlane(event);
+    const point = pointOnPlane(event, interaction.surface.point, interaction.surface.normal);
     const previous = interaction.points.slice(-3);
     if (point && (previous.length === 0 || distance3(previous, point) >= Math.max(0.5, app.project.settings.snapIncrement))) {
       interaction.points.push(...point);
@@ -2462,6 +2959,7 @@ const handlePointerMove = (event) => {
       return;
     }
     const delta = subtract3(current, interaction.startPoint);
+    app.snap = { point: current, kind: "inference", label: "move plane", surface: interaction.surface };
     interaction.moved = interaction.moved || pointerMovement(pointer, interaction.startPointer) > 3 * app.renderer.pixelRatio;
     for (const id of interaction.entities) {
       const entity = getEntity(app.project, id);
@@ -2471,20 +2969,6 @@ const handlePointerMove = (event) => {
       }
     }
     setStatus(`Move: ${formatLength(delta[0])}, ${formatLength(delta[1])}, ${formatLength(delta[2])}`);
-    requestRender();
-    return;
-  }
-  if (interaction.kind === "rotate") {
-    const angle = (pointer.x - interaction.startPointer.x) * 0.01;
-    for (const id of interaction.entities) {
-      const entity = getEntity(app.project, id);
-      const initial = interaction.transforms.get(id);
-      if (entity && initial) {
-        entity.transform.rotation = [...initial.rotation];
-        entity.transform.rotation[2] = initial.rotation[2] + angle;
-      }
-    }
-    setStatus(`Rotate: ${formatAngle(angle)}`);
     requestRender();
     return;
   }
@@ -2522,17 +3006,22 @@ const handlePointerMove = (event) => {
 
 const handlePointerUp = (event) => {
   const interaction = app.interaction;
-  if (!interaction || interaction.pointerId !== event.pointerId) {
+  if (!interaction || (interaction.pointerId !== undefined && interaction.pointerId !== event.pointerId)) {
     return;
   }
   if (elements.canvas.hasPointerCapture(event.pointerId)) {
     elements.canvas.releasePointerCapture(event.pointerId);
   }
-  app.interaction = null;
-  elements.canvas.style.cursor = ["orbit", "pan", "zoom"].includes(app.activeTool) ? "grab" : app.activeTool === "select" ? "default" : "crosshair";
+  if (interaction.kind !== "rotate-guide") {
+    app.interaction = null;
+  }
+  setViewportCursor();
   if (interaction.kind === "orbit" || interaction.kind === "pan" || interaction.kind === "zoom") {
     scheduleCameraAutosave();
     requestRender();
+    return;
+  }
+  if (interaction.kind === "rotate-guide") {
     return;
   }
   if (interaction.kind === "direct-move") {
@@ -2541,6 +3030,7 @@ const handlePointerUp = (event) => {
     } else {
       requestRender();
     }
+    app.snap = null;
     return;
   }
   if (interaction.kind === "move" || interaction.kind === "rotate" || interaction.kind === "scale") {
@@ -2556,6 +3046,9 @@ const handlePointerUp = (event) => {
         setSelection([entity.id]);
       }
     }
+    app.pending = null;
+    app.inference = null;
+    app.snap = null;
     requestRender();
     return;
   }
@@ -2598,12 +3091,14 @@ const handlePointerUp = (event) => {
 };
 
 const cancelActiveOperation = () => {
-  if (app.interaction?.before && ["move", "rotate", "scale", "direct-move"].includes(app.interaction.kind)) {
+  if (app.interaction?.before && ["move", "rotate", "scale", "direct-move", "rotate-guide"].includes(app.interaction.kind)) {
     restoreSnapshot(app.interaction.before);
   }
   app.interaction = null;
   app.pending = null;
   app.hoverPoint = null;
+  app.inference = null;
+  app.snap = null;
   setTool("select");
   setStatus("Operation cancelled.");
 };
@@ -2707,6 +3202,7 @@ const bindInterface = () => {
   document.querySelector("#add-scene-button").addEventListener("click", addSceneDialog);
   document.querySelector("#help-button").addEventListener("click", showHelp);
   elements.viewCube.addEventListener("click", resetView);
+  bindFloatingPalette();
   elements.measurements.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -2754,8 +3250,23 @@ const bindInterface = () => {
       setStatus(`Could not import STL: ${error.message}`, "error");
     }
   });
-  window.addEventListener("resize", requestRender);
+  window.addEventListener("resize", () => {
+    if (app.paletteDetached) {
+      positionFloatingPalette();
+    }
+    requestRender();
+  });
   window.addEventListener("keydown", handleKeyboard);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Control") {
+      lockInference();
+    }
+  });
+  window.addEventListener("keyup", (event) => {
+    if (event.key === "Control") {
+      unlockInference();
+    }
+  });
   window.addEventListener("beforeunload", () => {
     if (app.dirty) {
       persistWorkspaceNow().catch(() => {});
@@ -2896,6 +3407,9 @@ const handleKeyboard = (event) => {
     }
     return;
   }
+  if (event.key === "Control") {
+    lockInference();
+  }
   if (event.key === "Escape") {
     event.preventDefault();
     cancelActiveOperation();
@@ -2963,7 +3477,8 @@ const init = async () => {
   await restoreAutosave();
   loadPreferences();
   bindInterface();
-  selectRibbon("file");
+  selectRibbon("home");
+  setPaletteDetached(app.preferences.paletteDetached);
   setTool("select");
   applyAppearance();
   updatePanels();

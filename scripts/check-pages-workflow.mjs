@@ -5,10 +5,11 @@ const workflow = await readFile(resolve(".github/workflows/deploy-pages.yml"), "
 const requiredEntries = [
   "pages: write",
   "id-token: write",
-  "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
-  "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-  "actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa",
-  "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+  "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+  "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+  "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
+  "include-hidden-files: true",
   "node scripts/build-pages.mjs",
   "node scripts/check-pages-artifact.mjs"
 ];

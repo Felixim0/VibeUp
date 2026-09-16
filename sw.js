@@ -1,4 +1,4 @@
-const CACHE_NAME = "vibe-up-static-v4";
+const CACHE_NAME = "vibe-up-static-v6";
 const CACHE_PREFIX = "vibe-up-static-";
 const APP_SHELL = [
   "./",
@@ -16,7 +16,17 @@ const APP_SHELL = [
   "./manifest.webmanifest",
   "./icons/vibe-up.svg",
   "./icons/vibe-up-192.png",
-  "./icons/vibe-up-512.png"
+  "./icons/vibe-up-512.png",
+  "./icons/cursor-select.svg",
+  "./icons/cursor-move.svg",
+  "./icons/cursor-rotate.svg",
+  "./icons/cursor-draw.svg",
+  "./icons/cursor-measure.svg",
+  "./icons/cursor-paint.svg",
+  "./icons/cursor-erase.svg",
+  "./icons/cursor-orbit.svg",
+  "./icons/cursor-pan.svg",
+  "./icons/cursor-zoom.svg"
 ];
 
 self.addEventListener("install", (event) => {

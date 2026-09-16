@@ -15,7 +15,7 @@
     <title>vibe-up | Offline 3D editor</title>
   </head>
   <body class="theme-light">
-    <div class="app-shell">
+    <div class="app-shell" id="app-shell">
       <header class="titlebar">
         <div class="brand" aria-label="vibe-up">
           <img src="./icons/vibe-up.svg" alt="" width="28" height="28" />
@@ -33,7 +33,8 @@
       </header>
 
       <nav class="menu-bar" aria-label="Application menus">
-        <button class="menu-button active" type="button" data-menu="file">File</button>
+        <button class="menu-button active" type="button" data-menu="home">Home</button>
+        <button class="menu-button" type="button" data-menu="file">File</button>
         <button class="menu-button" type="button" data-menu="edit">Edit</button>
         <button class="menu-button" type="button" data-menu="view">View</button>
         <button class="menu-button" type="button" data-menu="camera">Camera</button>
@@ -44,8 +45,48 @@
         <button class="menu-button" type="button" data-menu="appearance">Appearance</button>
       </nav>
 
-      <section class="ribbon" aria-label="Tools">
-        <div class="ribbon-group" data-ribbon="file">
+      <section class="ribbon" id="ribbon" aria-label="Tools">
+        <div class="ribbon-group" data-ribbon="home">
+          <button class="tool-button tool-select active" type="button" data-tool="select" title="Select and drag (Space)">
+            <span class="tool-icon">&#10148;</span><span>Select</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="line" title="Line (L)">
+            <span class="tool-icon">&#9585;</span><span>Line</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="rectangle" title="Rectangle (R)">
+            <span class="tool-icon">&#9645;</span><span>Rectangle</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="circle" title="Circle (C)">
+            <span class="tool-icon">&#9675;</span><span>Circle</span>
+          </button>
+          <button class="tool-button" type="button" data-action="add-box" title="Add a dimensioned box">
+            <span class="tool-icon">&#9633;</span><span>Box</span>
+          </button>
+          <span class="ribbon-divider"></span>
+          <button class="tool-button tool-select" type="button" data-tool="move" title="Move (M)">
+            <span class="tool-icon">&#8596;</span><span>Move</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="rotate" title="Rotate with protractor (Q)">
+            <span class="tool-icon">&#10226;</span><span>Rotate</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="pushpull" title="Push/Pull (P)">
+            <span class="tool-icon">&#8597;</span><span>Push/Pull</span>
+          </button>
+          <button class="tool-button tool-select" type="button" data-tool="tape" title="Tape Measure (T)">
+            <span class="tool-icon">&#9552;</span><span>Tape</span>
+          </button>
+          <button class="tool-button" type="button" data-action="zoom-extents" title="Fit visible model (Shift+Z)">
+            <span class="tool-icon">&#8864;</span><span>Zoom Extents</span>
+          </button>
+        </div>
+
+        <div class="ribbon-utility">
+          <button class="ribbon-utility-button" id="detach-ribbon-button" type="button" title="Detach tools into a floating palette">
+            Detach tools
+          </button>
+        </div>
+
+        <div class="ribbon-group hidden" data-ribbon="file">
           <button class="tool-button" type="button" data-action="new-project" title="New project (Ctrl+N)">
             <span class="tool-icon">+</span><span>New</span>
           </button>
@@ -258,10 +299,19 @@
         </div>
       </section>
 
+      <aside class="floating-palette" id="floating-palette" hidden aria-label="Floating tools palette">
+        <header class="floating-palette-title" id="floating-palette-title">
+          <span>Tools</span>
+          <button class="floating-palette-close" id="attach-ribbon-button" type="button" title="Attach tools to the ribbon">&#215;</button>
+        </header>
+        <div class="floating-palette-tools" id="floating-palette-tools"></div>
+      </aside>
+
       <main class="work-area">
         <section class="viewport-panel" aria-label="3D workspace">
           <canvas id="viewport" aria-label="3D editing viewport" tabindex="0"></canvas>
           <div class="annotation-layer" id="annotation-layer" aria-hidden="true"></div>
+          <div class="snap-indicator" id="snap-indicator" aria-hidden="true" hidden></div>
           <div class="viewport-hud" aria-hidden="true">
             <div class="axis-indicator"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
             <div class="view-cube" id="view-cube" title="Reset to isometric view">ISO</div>

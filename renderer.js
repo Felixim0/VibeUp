@@ -501,7 +501,10 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.previewBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(points), gl.DYNAMIC_DRAW);
     this.useLineProgram(viewProjection, pointSize);
-    this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, pointsMode ? gl.POINTS : gl.LINE_STRIP);
+    this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, gl.LINE_STRIP);
+    if (pointsMode) {
+      this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, gl.POINTS);
+    }
   }
 
   render(project, camera, selection = new Set(), preview = null) {

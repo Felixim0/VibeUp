@@ -107,6 +107,24 @@ export const mat4RotationZ = (angle) => {
   ];
 };
 
+export const mat4RotationAxis = (axis, angle) => {
+  const [x, y, z] = normalize3(axis);
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const inverseCosine = 1 - cosine;
+  return [
+    x * x * inverseCosine + cosine, y * x * inverseCosine + z * sine, z * x * inverseCosine - y * sine, 0,
+    x * y * inverseCosine - z * sine, y * y * inverseCosine + cosine, z * y * inverseCosine + x * sine, 0,
+    x * z * inverseCosine + y * sine, y * z * inverseCosine - x * sine, z * z * inverseCosine + cosine, 0,
+    0, 0, 0, 1
+  ];
+};
+
+export const mat4RotationAroundPoint = (axis, angle, point) => mat4Multiply(
+  mat4Multiply(mat4Translation(point), mat4RotationAxis(axis, angle)),
+  mat4Translation(scale3(point, -1))
+);
+
 export const mat4FromTransform = (transform = {}) => {
   const position = transform.position ?? [0, 0, 0];
   const rotation = transform.rotation ?? [0, 0, 0];
