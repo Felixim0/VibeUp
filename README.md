@@ -2,6 +2,8 @@
 
 An offline-first, installable browser 3D editor for millimetre-based modelling and STL workflows. vibe-up is a static Progressive Web App with no runtime third-party dependencies.
 
+[Try VibeUp For Free! :0 ](https://felixim0.github.io/VibeUp/).
+
 ## Workflow Upgrade
 
 - GitHub Pages deployment uses Node 24-compatible, SHA-pinned actions: Checkout v7, Setup Node v7, Upload Pages Artifact v5, and Deploy Pages v5.
