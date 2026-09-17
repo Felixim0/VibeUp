@@ -10,7 +10,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 
 ## Core workflow
 
-- **Select is the default pointer tool.** Click an object to select it; drag any selected object directly in the viewport to move it on the clicked face plane.
+- **Select is the default pointer tool.** Click a mesh face or visible mesh edge to select that component; drag a selected object directly in the viewport to move it on the clicked face plane.
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Dragging switches to a grab state so active manipulation is unambiguous.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
@@ -42,6 +42,10 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 
 - Line, rectangle, circle, polygon, three-point arc, and freehand tools.
 - Draw on the ground plane or click a model face to draw directly on that face plane.
+- Circle segment count is configurable from **Segments** on Home or Draw, and can be entered as `radius, segments` in Measurements.
+- Circular faces render as one plain face; their triangles are retained internally only for robust geometry and STL export.
+- Select individual mesh faces and visible mesh edges. A selected face is highlighted independently, and Push/Pull moves only that face.
+- Push/Pull of a circular face through an axis-aligned Box produces a closed circular through-hole rather than an overlapping cylinder. Unsupported placements fail safely rather than creating an overlapping solid.
 - Dimensioned box and cylinder creation.
 - Push/Pull planar faces into solids.
 - Offset planar faces and create a straight-vector Follow Me sweep.
@@ -53,7 +57,8 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 
 - Orbit, pan, zoom, top/front/right/isometric views, and Zoom Extents.
 - Perspective or parallel projection.
-- Grid, mesh-edge, and shading toggles.
+- Grid and mesh-edge toggles, with flat face colours by default. Face back-sides are shown in blue to make reversed winding visible.
+- Wheel zoom slows proportionally as the camera approaches the model for fine positioning.
 - Light theme by default plus a dark-theme option.
 - Custom workspace, grid, edge, selection colours, and edge thickness.
 - Yellow selection by default, configurable from Appearance.
@@ -91,6 +96,8 @@ https://OWNER.github.io/REPOSITORY/
 ```
 
 The HTML, web manifest, and service worker use relative asset paths, so GitHub Pages project URLs and custom-domain roots both work. GitHub Pages serves `github.io` sites using HTTPS, which allows Chromium to install the PWA.
+
+Deploy updates activate a new service worker and refresh the application shell automatically. Saved `.vibeup` files and local autosave data are retained, so manual `localStorage.clear()` is no longer required after deployment.
 
 ## Development
 

@@ -40,7 +40,7 @@ export class OrbitCamera {
     let projection;
 
     if (this.projectionType === "parallel") {
-      const verticalSpan = Math.max(10, this.distance * 0.82);
+      const verticalSpan = Math.max(0.1, this.distance * 0.82);
       projection = mat4Ortho(
         (-verticalSpan * aspect) / 2,
         (verticalSpan * aspect) / 2,
@@ -73,7 +73,8 @@ export class OrbitCamera {
   }
 
   zoom(delta) {
-    this.distance = Math.max(1, Math.min(1000000, this.distance * Math.exp(delta * 0.0015)));
+    const precision = Math.max(0.0001, Math.min(0.0015, this.distance / 300000));
+    this.distance = Math.max(0.01, Math.min(1000000, this.distance * Math.exp(delta * precision)));
   }
 
   fit(bounds) {

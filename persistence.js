@@ -1,8 +1,10 @@
 const DATABASE_NAME = "vibe-up";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 6;
 const STORE_NAME = "workspace";
 const DOCUMENT_KEY = "autosave";
 const RECOVERY_STORE = "recovery";
+const VERSION_KEY = "application-version";
+const CURRENT_VERSION = "vibe-up-0.4.0";
 
 const openDatabase = () => new Promise((resolve, reject) => {
   if (!("indexedDB" in globalThis)) {
@@ -101,6 +103,31 @@ export const saveRecovery = async (workspace) => {
       ...workspace,
       id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     });
+    await transactionComplete(transaction);
+  } finally {
+    database.close();
+  }
+};
+
+export const migrateWorkspace = async () => {
+  const database = await openDatabase();
+  if (!database) {
+    return;
+  }
+  try {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    const workspace = transaction.objectStore(STORE_NAME);
+    const version = await new Promise((resolve, reject) => {
+      const request = workspace.get(VERSION_KEY);
+      request.onsuccess = () => {
+        if (request.result !== CURRENT_VERSION) {
+          workspace.put(CURRENT_VERSION, VERSION_KEY);
+        }
+        resolve(request.result);
+      };
+      request.onerror = () => reject(request.error ?? new Error("Could not migrate local workspace."));
+    });
+    void version;
     await transactionComplete(transaction);
   } finally {
     database.close();

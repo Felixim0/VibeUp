@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createZip, decodeJson, encodeJson, readZip } from "../archive.js";
+import { OrbitCamera } from "../camera.js";
 import { subtractMeshes, validateSubtractInputs } from "../csg.js";
 import {
   addEntity,
   createBoxEntity,
+  cutCircularHoleThroughBox,
   createCircleEntity,
   createDemoProject,
   createEmptyProject,
@@ -14,8 +16,10 @@ import {
   entityBounds,
   extrudeProfile,
   getEntity,
+  getMeshFaceRegion,
   explodeGroup,
   makeGroup,
+  moveMeshFace,
   meshReport,
   meshWorldVertices,
   projectBounds,
@@ -137,6 +141,91 @@ test("profile drawings can be created on a vertical object face", () => {
 test("circle profiles honour their supplied surface normal", () => {
   const circle = createCircleEntity([10, 0, 0], 5, 8, "Face circle", [1, 0, 0]);
   assert.ok(circle.vertices.every((value, index) => index % 3 !== 0 || value === 10));
+});
+
+test("circle stores its requested segment count", () => {
+  const circle = createCircleEntity([0, 0, 0], 10, 18);
+  assert.equal(circle.metadata.segments, 18);
+  assert.equal(circle.vertices.length / 3, 18);
+});
+
+test("a circle pushed through a box creates a closed manifold hole", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 60));
+  const circle = createCircleEntity([0, 0, 60], 20, 24, "Circle", [0, 0, 1]);
+  const hole = cutCircularHoleThroughBox(project, box, {
+    points: circle.metadata.profilePoints,
+    normal: circle.metadata.profileNormal
+  });
+  assert.ok(hole);
+  const holeProject = createEmptyProject();
+  addEntity(holeProject, hole);
+  const report = meshReport(holeProject, [hole]);
+  assert.equal(report.degenerateCount, 0);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+});
+
+test("an oversized circle cannot replace a box with an invalid hole", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 60));
+  const circle = createCircleEntity([0, 0, 60], 51, 24, "Oversized circle", [0, 0, 1]);
+  const hole = cutCircularHoleThroughBox(project, box, {
+    points: circle.metadata.profilePoints,
+    normal: circle.metadata.profileNormal
+  });
+  assert.equal(hole, null);
+  assert.equal(project.entities.length, 1);
+});
+
+test("circle through-hole works from every axis-aligned box face", () => {
+  const faces = [
+    [[0, 0, 60], [0, 0, 1]],
+    [[0, 0, 0], [0, 0, -1]],
+    [[50, 0, 30], [1, 0, 0]],
+    [[-50, 0, 30], [-1, 0, 0]],
+    [[0, 40, 30], [0, 1, 0]],
+    [[0, -40, 30], [0, -1, 0]]
+  ];
+  for (const [center, normal] of faces) {
+    const project = createEmptyProject();
+    const box = addEntity(project, createBoxEntity(100, 80, 60));
+    const circle = createCircleEntity(center, 10, 18, "Circle", normal);
+    const hole = cutCircularHoleThroughBox(project, box, {
+      points: circle.metadata.profilePoints,
+      normal: circle.metadata.profileNormal
+    });
+    assert.ok(hole);
+    const holeProject = createEmptyProject();
+    addEntity(holeProject, hole);
+    const report = meshReport(holeProject, [hole]);
+    assert.equal(report.boundaryEdgeCount, 0);
+    assert.equal(report.nonManifoldEdgeCount, 0);
+  }
+});
+
+test("selected box face moves independently with Push/Pull", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(20, 20, 20));
+  const topFace = getMeshFaceRegion(project, box, 2);
+  assert.ok(topFace);
+  moveMeshFace(project, box, topFace, 10);
+  const bounds = entityBounds(project, box);
+  assert.equal(bounds.max[2], 30);
+  assert.equal(bounds.min[2], 0);
+});
+
+test("zoom becomes less sensitive near the model", () => {
+  const distant = new OrbitCamera();
+  distant.distance = 1000;
+  distant.zoom(120);
+  const distantStep = Math.abs(1000 - distant.distance);
+  const close = new OrbitCamera();
+  close.distance = 10;
+  close.zoom(120);
+  const closeStep = Math.abs(10 - close.distance);
+  assert.ok(closeStep / 10 < distantStep / 1000);
+  assert.ok(close.distance > 0);
 });
 
 test("a vertical-face rectangle remains on its plane after an exact extrusion", () => {

@@ -70,9 +70,10 @@ export const createEmptyProject = () => ({
   settings: {
     gridVisible: true,
     edgesVisible: true,
-    shadowsVisible: true,
+    shadowsVisible: false,
     projection: "perspective",
     snapIncrement: 1,
+    circleSegments: 24,
     section: null,
     appearance: structuredClone(DEFAULT_APPEARANCE)
   }
@@ -443,6 +444,7 @@ export const createCircleEntity = (center, radius, segments = 32, name = "Circle
   const entity = createProfileEntity(points, name, normal);
   entity.metadata.segments = count;
   entity.metadata.radius = radius;
+  entity.metadata.center = Array.from(center);
   return entity;
 };
 
@@ -676,19 +678,340 @@ export const allRenderableEntities = (project) => project.entities.filter((entit
   isEntityVisible(project, entity)
 ));
 
-export const edgeIndicesForMesh = (indices) => {
+export const edgeIndicesForMesh = (vertices, indices) => {
   const edges = new Map();
-  for (let index = 0; index < indices.length; index += 3) {
-    const triangle = [indices[index], indices[index + 1], indices[index + 2]];
+  const keyForVertex = (vertexIndex) => localPointAt(vertices, vertexIndex).map((value) => Math.round(value * 1000000)).join(":");
+  for (let offset = 0; offset < indices.length; offset += 3) {
+    const triangle = [indices[offset], indices[offset + 1], indices[offset + 2]];
+    const points = triangle.map((vertexIndex) => localPointAt(vertices, vertexIndex));
+    const normal = normalize3(cross3(subtract3(points[1], points[0]), subtract3(points[2], points[0])));
     for (let edge = 0; edge < 3; edge += 1) {
       const first = triangle[edge];
       const second = triangle[(edge + 1) % 3];
-      const lower = Math.min(first, second);
-      const upper = Math.max(first, second);
-      edges.set(`${lower}:${upper}`, [lower, upper]);
+      const firstKey = keyForVertex(first);
+      const secondKey = keyForVertex(second);
+      const key = firstKey < secondKey ? `${firstKey}|${secondKey}` : `${secondKey}|${firstKey}`;
+      const record = edges.get(key) ?? { indices: [first, second], normals: [] };
+      record.normals.push(normal);
+      edges.set(key, record);
     }
   }
-  return Array.from(edges.values()).flat();
+
+  return Array.from(edges.values())
+    .filter((edge) => edge.normals.length === 1 || edge.normals.some((normal) => dot3(normal, edge.normals[0]) < 0.9999))
+    .flatMap((edge) => edge.indices);
+};
+
+export const getMeshFaceRegion = (project, entity, triangleIndex) => {
+  if (entity.kind !== "mesh" || !Number.isInteger(triangleIndex) || triangleIndex < 0 || triangleIndex >= entity.indices.length / 3) {
+    return null;
+  }
+  const triangleCount = entity.indices.length / 3;
+  const worldVertices = meshWorldVertices(project, entity);
+  const trianglePoints = (index) => {
+    const offset = index * 3;
+    return [
+      localPointAt(worldVertices, entity.indices[offset]),
+      localPointAt(worldVertices, entity.indices[offset + 1]),
+      localPointAt(worldVertices, entity.indices[offset + 2])
+    ];
+  };
+  const [seedA, seedB, seedC] = trianglePoints(triangleIndex);
+  const seedNormal = normalize3(cross3(subtract3(seedB, seedA), subtract3(seedC, seedA)));
+  if (Math.hypot(...seedNormal) < EPSILON) {
+    return null;
+  }
+  const vertexKey = (vertexIndex) => {
+    const point = localPointAt(worldVertices, vertexIndex);
+    return point.map((value) => Math.round(value * 1000000)).join(":");
+  };
+  const edgeKey = (first, second) => {
+    const firstKey = vertexKey(first);
+    const secondKey = vertexKey(second);
+    return firstKey < secondKey ? `${firstKey}|${secondKey}` : `${secondKey}|${firstKey}`;
+  };
+  const edges = new Map();
+  for (let index = 0; index < triangleCount; index += 1) {
+    const offset = index * 3;
+    const triangle = [entity.indices[offset], entity.indices[offset + 1], entity.indices[offset + 2]];
+    for (let edge = 0; edge < 3; edge += 1) {
+      const key = edgeKey(triangle[edge], triangle[(edge + 1) % 3]);
+      const connected = edges.get(key) ?? [];
+      connected.push(index);
+      edges.set(key, connected);
+    }
+  }
+  const isCoplanar = (index) => {
+    const [a, b, c] = trianglePoints(index);
+    const normal = normalize3(cross3(subtract3(b, a), subtract3(c, a)));
+    return dot3(seedNormal, normal) > 0.9999 && Math.abs(dot3(seedNormal, subtract3(a, seedA))) < 0.0001;
+  };
+  const region = new Set([triangleIndex]);
+  const queue = [triangleIndex];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const offset = current * 3;
+    const triangle = [entity.indices[offset], entity.indices[offset + 1], entity.indices[offset + 2]];
+    for (let edge = 0; edge < 3; edge += 1) {
+      const key = edgeKey(triangle[edge], triangle[(edge + 1) % 3]);
+      for (const neighbour of edges.get(key) ?? []) {
+        if (!region.has(neighbour) && isCoplanar(neighbour)) {
+          region.add(neighbour);
+          queue.push(neighbour);
+        }
+      }
+    }
+  }
+  const triangleIndices = Array.from(region).sort((first, second) => first - second);
+  const vertexIndices = Array.from(new Set(triangleIndices.flatMap((index) => entity.indices.slice(index * 3, index * 3 + 3))));
+  return { triangleIndices, vertexIndices, normal: seedNormal, point: seedA };
+};
+
+export const moveMeshFace = (project, entity, faceRegion, distance) => {
+  if (entity.kind !== "mesh" || !faceRegion || !Number.isFinite(distance)) {
+    throw new Error("A valid mesh face and distance are required for Push/Pull.");
+  }
+  const localPoints = entity.vertices;
+  const inverseWorldTransform = mat4Invert(entityWorldMatrix(project, entity));
+  if (!inverseWorldTransform) {
+    throw new Error("The face world transform cannot be inverted.");
+  }
+  const targetWorldPoint = add3(faceRegion.point, scale3(faceRegion.normal, distance));
+  const targetLocalPoint = transformPoint(inverseWorldTransform, targetWorldPoint);
+  const sourceLocalPoint = transformPoint(inverseWorldTransform, faceRegion.point);
+  const localDelta = subtract3(targetLocalPoint, sourceLocalPoint);
+  const selectedKeys = new Set(faceRegion.vertexIndices.map((vertexIndex) => localPointAt(localPoints, vertexIndex).map((value) => Math.round(value * 1000000)).join(":")));
+  for (let vertexIndex = 0; vertexIndex < localPoints.length / 3; vertexIndex += 1) {
+    const offset = vertexIndex * 3;
+    const key = `${Math.round(localPoints[offset] * 1000000)}:${Math.round(localPoints[offset + 1] * 1000000)}:${Math.round(localPoints[offset + 2] * 1000000)}`;
+    if (!selectedKeys.has(key)) {
+      continue;
+    }
+    localPoints[offset] += localDelta[0];
+    localPoints[offset + 1] += localDelta[1];
+    localPoints[offset + 2] += localDelta[2];
+  }
+  entity.vertices = Array.from(localPoints);
+  entity.metadata = { ...entity.metadata, primitive: "edited-mesh", planar: false, solid: entity.metadata?.solid === true };
+  delete entity.metadata.dimensions;
+  return entity;
+};
+
+const profileCenter = (points) => {
+  const center = [0, 0, 0];
+  const count = points.length / 3;
+  for (let index = 0; index < count; index += 1) {
+    center[0] += points[index * 3];
+    center[1] += points[index * 3 + 1];
+    center[2] += points[index * 3 + 2];
+  }
+  return scale3(center, 1 / count);
+};
+
+const faceCornerPoints = (bounds, normal) => {
+  const [minX, minY, minZ] = bounds.min;
+  const [maxX, maxY, maxZ] = bounds.max;
+  if (Math.abs(normal[0]) > 0.9) {
+    const x = normal[0] > 0 ? maxX : minX;
+    return [[x, minY, minZ], [x, maxY, minZ], [x, maxY, maxZ], [x, minY, maxZ]];
+  }
+  if (Math.abs(normal[1]) > 0.9) {
+    const y = normal[1] > 0 ? maxY : minY;
+    return [[minX, y, minZ], [maxX, y, minZ], [maxX, y, maxZ], [minX, y, maxZ]];
+  }
+  const z = normal[2] > 0 ? maxZ : minZ;
+  return [[minX, minY, z], [maxX, minY, z], [maxX, maxY, z], [minX, maxY, z]];
+};
+
+const boxFaceCornersForAxis = (bounds, axis, coordinate) => {
+  const first = (axis + 1) % 3;
+  const second = (axis + 2) % 3;
+  const corners = [];
+  for (const firstValue of [bounds.min[first], bounds.max[first]]) {
+    for (const secondValue of [bounds.min[second], bounds.max[second]]) {
+      const point = [0, 0, 0];
+      point[axis] = coordinate;
+      point[first] = firstValue;
+      point[second] = secondValue;
+      corners.push(point);
+    }
+  }
+  return corners;
+};
+
+const boxFaceCornersByAxis = (bounds, axis, coordinate) => {
+  const first = (axis + 1) % 3;
+  const second = (axis + 2) % 3;
+  const corner = (firstValue, secondValue) => {
+    const point = [0, 0, 0];
+    point[axis] = coordinate;
+    point[first] = firstValue;
+    point[second] = secondValue;
+    return point;
+  };
+  return [
+    corner(bounds.min[first], bounds.min[second]),
+    corner(bounds.max[first], bounds.min[second]),
+    corner(bounds.max[first], bounds.max[second]),
+    corner(bounds.min[first], bounds.max[second])
+  ];
+};
+
+const isAxisNormal = (normal) => Math.max(Math.abs(normal[0]), Math.abs(normal[1]), Math.abs(normal[2])) > 0.9999;
+
+const addOrientedTriangle = (vertices, indices, first, second, third, normal) => {
+  const cross = cross3(subtract3(second, first), subtract3(third, first));
+  const triangle = dot3(cross, normal) >= 0 ? [first, second, third] : [first, third, second];
+  const start = vertices.length / 3;
+  for (const point of triangle) {
+    vertices.push(...point);
+  }
+  indices.push(start, start + 1, start + 2);
+};
+
+const addOrientedQuad = (vertices, indices, first, second, third, fourth, normal) => {
+  addOrientedTriangle(vertices, indices, first, second, third, normal);
+  addOrientedTriangle(vertices, indices, first, third, fourth, normal);
+};
+
+const outerPointForCircleRay = (center, direction, bounds, axis) => {
+  const distances = [];
+  for (let coordinate = 0; coordinate < 3; coordinate += 1) {
+    if (coordinate === axis || Math.abs(direction[coordinate]) < EPSILON) {
+      continue;
+    }
+    distances.push(direction[coordinate] > 0
+      ? (bounds.max[coordinate] - center[coordinate]) / direction[coordinate]
+      : (bounds.min[coordinate] - center[coordinate]) / direction[coordinate]);
+  }
+  const distance = Math.min(...distances.filter((value) => value > EPSILON));
+  return Number.isFinite(distance) ? add3(center, scale3(direction, distance)) : null;
+};
+
+export const cutCircularHoleThroughBox = (project, target, profile) => {
+  if (target.kind !== "mesh" || target.metadata?.primitive !== "box" || target.parentId || !profile?.points || profile.points.length < 9) {
+    return null;
+  }
+  const rotation = target.transform?.rotation ?? [0, 0, 0];
+  const scale = target.transform?.scale ?? [1, 1, 1];
+  if (rotation.some((value) => Math.abs(value) > EPSILON) || scale.some((value) => Math.abs(value - 1) > EPSILON)) {
+    return null;
+  }
+  const normal = normalize3(profile.normal);
+  if (!isAxisNormal(normal)) {
+    return null;
+  }
+  const bounds = entityBounds(project, target);
+  if (!bounds) {
+    return null;
+  }
+  const axis = Math.abs(normal[0]) > 0.9 ? 0 : Math.abs(normal[1]) > 0.9 ? 1 : 2;
+  const center = profileCenter(profile.points);
+  const { tangent, bitangent } = planeBasis(normal);
+  const radius = distance3(center, [profile.points[0], profile.points[1], profile.points[2]]);
+  const otherAxes = [0, 1, 2].filter((coordinate) => coordinate !== axis);
+  if (
+    radius <= EPSILON ||
+    center[otherAxes[0]] - radius <= bounds.min[otherAxes[0]] + EPSILON ||
+    center[otherAxes[0]] + radius >= bounds.max[otherAxes[0]] - EPSILON ||
+    center[otherAxes[1]] - radius <= bounds.min[otherAxes[1]] + EPSILON ||
+    center[otherAxes[1]] + radius >= bounds.max[otherAxes[1]] - EPSILON
+  ) {
+    return null;
+  }
+  const entryCoordinate = Math.abs(center[axis] - bounds.min[axis]) < Math.abs(center[axis] - bounds.max[axis]) ? bounds.min[axis] : bounds.max[axis];
+  const exitCoordinate = entryCoordinate === bounds.min[axis] ? bounds.max[axis] : bounds.min[axis];
+  const entryNormal = [0, 0, 0];
+  entryNormal[axis] = entryCoordinate === bounds.max[axis] ? 1 : -1;
+  if (Math.abs(center[axis] - entryCoordinate) > 0.01) {
+    return null;
+  }
+  const entryCenter = [...center];
+  const exitCenter = [...center];
+  entryCenter[axis] = entryCoordinate;
+  exitCenter[axis] = exitCoordinate;
+  const entryRing = [];
+  const outerEntryRing = [];
+  for (let offset = 0; offset < profile.points.length; offset += 3) {
+    const entryPoint = [profile.points[offset], profile.points[offset + 1], profile.points[offset + 2]];
+    entryPoint[axis] = entryCoordinate;
+    const radial = subtract3(entryPoint, entryCenter);
+    const outer = outerPointForCircleRay(entryCenter, radial, bounds, axis);
+    if (!outer || distance3(entryCenter, radial) <= EPSILON) {
+      return null;
+    }
+    entryRing.push(entryPoint);
+    outerEntryRing.push(outer);
+  }
+  const boundaryAngles = new Set();
+  for (const outer of outerEntryRing) {
+    const radial = subtract3(outer, entryCenter);
+    const angle = Math.atan2(dot3(radial, bitangent), dot3(radial, tangent));
+    boundaryAngles.add(Math.round((angle < 0 ? angle + Math.PI * 2 : angle) * 1000000) / 1000000);
+  }
+  for (const corner of boxFaceCornersForAxis(bounds, axis, entryCoordinate)) {
+    const radial = subtract3(corner, entryCenter);
+    const angle = Math.atan2(dot3(radial, bitangent), dot3(radial, tangent));
+    boundaryAngles.add(Math.round((angle < 0 ? angle + Math.PI * 2 : angle) * 1000000) / 1000000);
+  }
+  for (const corner of boxFaceCornersByAxis(bounds, axis, entryCoordinate)) {
+    const radial = subtract3(corner, entryCenter);
+    const angle = Math.atan2(dot3(radial, bitangent), dot3(radial, tangent));
+    boundaryAngles.add(Math.round((angle < 0 ? angle + Math.PI * 2 : angle) * 1000000) / 1000000);
+  }
+  const samples = Array.from(boundaryAngles).sort((first, second) => first - second).map((angle) => {
+    const radial = add3(scale3(tangent, Math.cos(angle)), scale3(bitangent, Math.sin(angle)));
+    const inner = add3(entryCenter, scale3(radial, distance3(entryCenter, entryRing[0])));
+    inner[axis] = entryCoordinate;
+    const outer = outerPointForCircleRay(entryCenter, radial, bounds, axis);
+    if (!outer) {
+      return null;
+    }
+    outer[axis] = entryCoordinate;
+    const innerExit = [...inner];
+    const outerExit = [...outer];
+    innerExit[axis] = exitCoordinate;
+    outerExit[axis] = exitCoordinate;
+    return { inner, outer, innerExit, outerExit, radial };
+  });
+  if (samples.some((sample) => sample === null)) {
+    return null;
+  }
+  const vertices = [];
+  const indices = [];
+  const segments = samples.length;
+  for (let index = 0; index < segments; index += 1) {
+    const next = (index + 1) % segments;
+    const current = samples[index];
+    const following = samples[next];
+    addOrientedQuad(vertices, indices, current.outer, following.outer, following.inner, current.inner, entryNormal);
+    addOrientedQuad(vertices, indices, current.outerExit, current.innerExit, following.innerExit, following.outerExit, scale3(entryNormal, -1));
+    addOrientedQuad(vertices, indices, current.inner, following.inner, following.innerExit, current.innerExit, scale3(normalize3(add3(current.radial, following.radial)), -1));
+    const midpoint = midpoint3(current.outer, following.outer);
+    const sideNormal = Math.abs(midpoint[0] - bounds.max[0]) < 0.001 ? [1, 0, 0]
+      : Math.abs(midpoint[0] - bounds.min[0]) < 0.001 ? [-1, 0, 0]
+        : Math.abs(midpoint[1] - bounds.max[1]) < 0.001 ? [0, 1, 0]
+          : Math.abs(midpoint[1] - bounds.min[1]) < 0.001 ? [0, -1, 0]
+            : null;
+    if (!sideNormal) {
+      return null;
+    }
+    addOrientedQuad(vertices, indices, current.outer, current.outerExit, following.outerExit, following.outer, sideNormal);
+  }
+  const result = createMeshEntity({
+    name: `${target.name} with circular cut`,
+    vertices,
+    indices,
+    materialId: target.materialId,
+    metadata: { primitive: "circular-through-hole", solid: true, source: target.id, segments }
+  });
+  result.tagId = target.tagId;
+  result.visible = target.visible;
+  result.locked = target.locked;
+  if (!meshIsClosed({ ...project, entities: [result], roots: [result.id] }, result)) {
+    return null;
+  }
+  return result;
 };
 
 export const computeNormals = (vertices, indices) => {

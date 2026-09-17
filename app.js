@@ -11,6 +11,9 @@ import {
   createAnnotationEntity,
   createBoxEntity,
   createCircleEntity,
+  cutCircularHoleThroughBox,
+  edgeIndicesForMesh,
+  getMeshFaceRegion,
   createCylinderEntity,
   createDemoProject,
   createEdgeEntity,
@@ -25,6 +28,7 @@ import {
   isEntityVisible,
   lineWorldPoints,
   makeGroup,
+  moveMeshFace,
   meshReport,
   meshWorldVertices,
   newId,
@@ -51,7 +55,7 @@ import {
   signedAngleAroundAxis,
   subtract3
 } from "./math.js";
-import { clearRecovery, loadRecovery, loadWorkspace, saveRecovery, saveWorkspace } from "./persistence.js";
+import { clearRecovery, loadRecovery, loadWorkspace, migrateWorkspace, saveRecovery, saveWorkspace } from "./persistence.js";
 import { Renderer } from "./renderer.js";
 import { createBinaryStl, parseStl, stlTriangleCount } from "./stl.js";
 
@@ -88,7 +92,7 @@ const TOOL_HINTS = {
   select: "Click an entity to select it. Shift-click adds or removes entities from the selection.",
   line: "Click a start point, then click an end point. Type a length in Measurements for an exact line.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
-  circle: "Click the centre, then the circumference. Type a radius in Measurements for an exact circle.",
+  circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
   polygon: "Click the centre, then the radius. Measurements accepts radius, sides.",
   arc: "Click centre, start, then end to draw an arc.",
   freehand: "Drag across the workspace to draw a freehand edge path.",
@@ -155,6 +159,7 @@ const app = {
   activeMaterialId: "material-default",
   interaction: null,
   pending: null,
+  componentSelection: null,
   hoverPoint: null,
   renderMatrices: null,
   history: [],
@@ -344,7 +349,8 @@ const snapshot = () => ({
   project: structuredClone(app.project),
   camera: app.camera.serialize(),
   selection: Array.from(app.selection),
-  selectionOrder: Array.from(app.selectionOrder)
+  selectionOrder: Array.from(app.selectionOrder),
+  componentSelection: structuredClone(app.componentSelection)
 });
 
 const resetTransientToolState = () => {
@@ -394,6 +400,7 @@ const mutate = (label, action) => {
     app.camera.restore(before.camera);
     app.selection = new Set(before.selection);
     app.selectionOrder = before.selectionOrder;
+    app.componentSelection = before.componentSelection;
     app.renderer?.invalidate();
     updatePanels();
     setStatus(error.message || "That edit could not be completed.", "error");
@@ -407,6 +414,7 @@ const restoreSnapshot = (state) => {
   app.camera.restore(state.camera);
   app.selection = new Set(state.selection.filter((id) => getEntity(app.project, id)));
   app.selectionOrder = state.selectionOrder.filter((id) => app.selection.has(id));
+  app.componentSelection = state.componentSelection ?? null;
   app.renderer.invalidate();
   applyAppearance();
   updatePanels();
@@ -466,6 +474,7 @@ const setSelection = (ids, mode = "replace") => {
     app.selection = new Set(validIds);
     app.selectionOrder = Array.from(validIds);
   }
+  app.componentSelection = null;
   updatePanels();
   requestRender();
 };
@@ -766,12 +775,70 @@ const pickEntity = (event) => {
         [vertices[b], vertices[b + 1], vertices[b + 2]],
         [vertices[c], vertices[c + 1], vertices[c + 2]]
       );
-      if (hit && (!closest || hit.distance < closest.distance)) {
-        closest = { entity, ...hit, coarse: false };
+      if (hit && (!closest || hit.distance <= closest.distance + 0.00001)) {
+        closest = { entity, ...hit, triangleIndex: index / 3, coarse: false };
       }
     }
   }
-  return closest ?? pickEdge(event);
+  return pickEdge(event) ?? closest;
+};
+
+const pickMeshEdge = (event, meshHit) => {
+  if (!meshHit?.entity || meshHit.entity.kind !== "mesh" || meshHit.coarse) {
+    return null;
+  }
+  const pointer = getPointer(event);
+  const viewport = app.renderer.getViewport();
+  const vertices = meshWorldVertices(app.project, meshHit.entity);
+  const threshold = 8 * app.renderer.pixelRatio;
+  let closest = null;
+  const visibleEdges = edgeIndicesForMesh(meshHit.entity.vertices, meshHit.entity.indices);
+  for (let index = 0; index < visibleEdges.length; index += 2) {
+    const startIndex = visibleEdges[index] * 3;
+    const endIndex = visibleEdges[index + 1] * 3;
+    const start3 = [vertices[startIndex], vertices[startIndex + 1], vertices[startIndex + 2]];
+    const end3 = [vertices[endIndex], vertices[endIndex + 1], vertices[endIndex + 2]];
+    const start = projectPoint(start3, viewport.width, viewport.height, app.renderMatrices.projection, app.renderMatrices.view);
+    const end = projectPoint(end3, viewport.width, viewport.height, app.renderMatrices.projection, app.renderMatrices.view);
+    if (!start || !end) {
+      continue;
+    }
+    const distance = pointSegmentDistance([pointer.x, pointer.y], start, end);
+    if (distance <= threshold && (!closest || distance < closest.distance)) {
+      closest = { entity: meshHit.entity, start: start3, end: end3, distance };
+    }
+  }
+  return closest;
+};
+
+const setComponentSelection = (selection) => {
+  app.componentSelection = selection;
+  if (selection?.entityId) {
+    app.selection = new Set([selection.entityId]);
+    app.selectionOrder = [selection.entityId];
+  }
+  updatePanels();
+  requestRender();
+};
+
+const selectMeshComponent = (event, hit) => {
+  if (hit.entity.kind !== "mesh" || hit.coarse) {
+    setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
+    return;
+  }
+  const edge = pickMeshEdge(event, hit);
+  if (edge) {
+    setComponentSelection({ type: "edge", entityId: hit.entity.id, start: edge.start, end: edge.end });
+    setStatus("Edge selected.");
+    return;
+  }
+  const face = getMeshFaceRegion(app.project, hit.entity, hit.triangleIndex);
+  if (face) {
+    setComponentSelection({ type: "face", entityId: hit.entity.id, ...face, point: hit.point });
+    setStatus("Face selected. Choose Push/Pull or drag with Push/Pull active.");
+  } else {
+    setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
+  }
 };
 
 const previewCircle = (center, edge, sides = 32) => {
@@ -920,7 +987,7 @@ const requestRender = () => {
   window.requestAnimationFrame(() => {
     app.renderScheduled = false;
     const preview = currentPreview();
-    app.renderMatrices = app.renderer.render(app.project, app.camera, app.selection, preview);
+    app.renderMatrices = app.renderer.render(app.project, app.camera, app.selection, app.componentSelection, preview);
     renderAnnotations();
     updateSnapIndicator();
   });
@@ -1060,9 +1127,11 @@ const setTool = (tool) => {
     restoreSnapshot(app.interaction.before);
   }
   app.activeTool = tool;
+  const selectedComponent = app.componentSelection;
   app.inference = null;
   app.snap = null;
   resetTransientToolState();
+  app.componentSelection = selectedComponent;
   refreshToolPresentation();
   setStatus(`${tool[0].toUpperCase()}${tool.slice(1)} tool active.`);
   requestRender();
@@ -1119,6 +1188,12 @@ const updateEntityPanel = () => {
 
   const entity = entities[0];
   const information = element("div", { className: "info-list" });
+  if (app.componentSelection?.entityId === entity.id) {
+    const component = element("div", { className: "info-row" });
+    const label = app.componentSelection.type === "face" ? `Face (${app.componentSelection.triangleIndices.length} triangles)` : "Edge";
+    append(component, element("label", { text: "Selection" }), element("span", { text: label }));
+    information.append(component);
+  }
   addInfoField(information, "Name", entity.name, (value) => mutate("Rename entity", () => {
     entity.name = String(value).trim() || entity.name;
   }));
@@ -1265,7 +1340,9 @@ const updateOutlinerPanel = () => {
 
 const updateSelectionStatus = () => {
   const entities = currentSelection();
-  elements.selectionStatus.textContent = entities.length === 0 ? "No selection" : entities.length === 1 ? `${entities[0].name} selected` : `${entities.length} selected`;
+  const component = app.componentSelection;
+  const suffix = component?.type === "face" ? " face selected" : component?.type === "edge" ? " edge selected" : " selected";
+  elements.selectionStatus.textContent = entities.length === 0 ? "No selection" : entities.length === 1 ? `${entities[0].name}${suffix}` : `${entities.length} selected`;
 };
 
 const updatePanels = () => {
@@ -1483,6 +1560,24 @@ const addCylinderDialog = () => {
   });
 };
 
+const setCircleSegmentsDialog = () => {
+  showInputModal({
+    title: "Circle Segments",
+    fields: [{ name: "segments", label: "Segments (3-96)", value: String(app.project.settings.circleSegments), type: "number", min: "3", max: "96", step: "1" }],
+    submitLabel: "Set Segments",
+    onSubmit: (values) => {
+      const segments = Math.round(Number.parseFloat(values.segments));
+      if (!Number.isFinite(segments) || segments < 3 || segments > 96) {
+        throw new Error("Circle segments must be a whole number from 3 to 96.");
+      }
+      mutate("Set circle segments", () => {
+        app.project.settings.circleSegments = segments;
+      });
+      setStatus(`Circle segments set to ${segments}.`);
+    }
+  });
+};
+
 const addTagDialog = () => {
   showInputModal({
     title: "Add Tag",
@@ -1604,9 +1699,10 @@ const normalizeSettings = (raw) => {
   const normalized = {
     gridVisible: settings.gridVisible !== false,
     edgesVisible: settings.edgesVisible !== false,
-    shadowsVisible: settings.shadowsVisible !== false,
+    shadowsVisible: settings.shadowsVisible === true,
     projection: settings.projection === "parallel" ? "parallel" : "perspective",
     snapIncrement: Number.isFinite(settings.snapIncrement) && settings.snapIncrement > 0 ? settings.snapIncrement : 1,
+    circleSegments: Number.isInteger(settings.circleSegments) ? Math.max(3, Math.min(96, settings.circleSegments)) : 24,
     section: null,
     appearance: normalizeAppearance(settings.appearance)
   };
@@ -2231,6 +2327,8 @@ const createLine = (start, end) => {
   return mutate("Draw line", () => addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] })));
 };
 
+const currentCircleSegments = () => Math.max(3, Math.min(96, Math.round(app.project.settings.circleSegments)));
+
 const createRectangle = (start, end, surface = drawingSurface()) => {
   const normal = surface.normal;
   const { tangent, bitangent } = planeBasis(normal);
@@ -2241,7 +2339,7 @@ const createRectangle = (start, end, surface = drawingSurface()) => {
   return mutate("Draw rectangle", () => addEntity(app.project, createRectangleEntity(start, end, surface.normal)));
 };
 
-const createCircle = (center, edge, segments = 32, name = "Circle", surface = drawingSurface()) => {
+const createCircle = (center, edge, segments = currentCircleSegments(), name = "Circle", surface = drawingSurface()) => {
   const radius = distance3(edge, center);
   if (radius < 0.0001) {
     throw new Error("A circle needs a non-zero radius.");
@@ -2306,17 +2404,70 @@ const createAxesAnnotation = (point) => mutate("Place axes", () => addEntity(app
 })));
 
 const applyPushPull = (height) => {
+  if (Math.abs(height) < 0.0001) {
+    throw new Error("Push/Pull height must not be zero.");
+  }
+  const component = app.componentSelection;
+  if (component?.type === "face") {
+    const entity = getEntity(app.project, component.entityId);
+    if (!entity || entity.locked) {
+      throw new Error("Select an unlocked face before using Push/Pull.");
+    }
+    if (entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal) {
+      return applyCirclePushPull(entity, height);
+    }
+    if (entity.metadata?.planar) {
+      return mutate("Push/Pull profile", () => {
+        extrudeProfile(entity, height);
+        app.renderer.invalidate(entity.id);
+      });
+    }
+    return mutate("Push/Pull face", () => {
+      moveMeshFace(app.project, entity, component, height);
+      app.renderer.invalidate(entity.id);
+    });
+  }
   const face = currentSelection().find((entity) => entity.kind === "mesh" && entity.metadata?.planar && !entity.locked);
   if (!face) {
     throw new Error("Select an unlocked planar face before using Push/Pull.");
-  }
-  if (Math.abs(height) < 0.0001) {
-    throw new Error("Push/Pull height must not be zero.");
   }
   return mutate("Push/Pull", () => {
     extrudeProfile(face, height);
     app.renderer.invalidate(face.id);
   });
+};
+
+const applyCirclePushPull = (circle, height) => {
+  const component = app.componentSelection?.entityId === circle.id ? app.componentSelection : null;
+  const profile = {
+    points: meshWorldVertices(app.project, circle),
+    normal: component?.normal ?? circle.metadata.profileNormal
+  };
+  let host = null;
+  let hole = null;
+  for (const candidate of app.project.entities) {
+    if (candidate.id === circle.id || candidate.kind !== "mesh" || candidate.metadata?.primitive !== "box" || candidate.locked) {
+      continue;
+    }
+    const candidateHole = cutCircularHoleThroughBox(app.project, candidate, profile);
+    if (candidateHole) {
+      host = candidate;
+      hole = candidateHole;
+      break;
+    }
+  }
+  if (hole) {
+    mutate("Cut circular through-hole", () => {
+      removeEntity(app.project, host.id);
+      removeEntity(app.project, circle.id);
+      addEntity(app.project, hole);
+      app.renderer.invalidate();
+    });
+    setSelection([hole.id]);
+    setStatus("Cut circular through-hole through the box.");
+    return hole;
+  }
+  throw new Error("This circular face must lie fully on an unlocked axis-aligned Box face to create a through-hole.");
 };
 
 const applyOffset = (distance) => {
@@ -2425,7 +2576,8 @@ const applyMeasurements = () => {
       const surface = pending.surface ?? { point: [0, 0, 0], normal: [0, 0, 1] };
       const { tangent } = planeBasis(surface.normal);
       const edge = add3(centre, scale3(tangent, values[0]));
-      const entity = app.activeTool === "circle" ? createCircle(centre, edge, 32, "Circle", surface) : createPolygon(centre, edge, Math.max(3, Math.round(values[1] ?? 6)), surface);
+      const segments = Math.max(3, Math.min(96, Math.round(values[1] ?? app.project.settings.circleSegments)));
+      const entity = app.activeTool === "circle" ? createCircle(centre, edge, segments, "Circle", surface) : createPolygon(centre, edge, segments, surface);
       if (entity) {
         setSelection([entity.id]);
         app.pending = null;
@@ -2525,7 +2677,7 @@ const handleDrawingClick = (event, point, surface = null) => {
       app.pending = null;
       app.inference = null;
     } else if (tool === "circle") {
-      const entity = createCircle(points[0], point, 32, "Circle", activeSurface);
+      const entity = createCircle(points[0], point, currentCircleSegments(), "Circle", activeSurface);
       if (entity) {
         setSelection([entity.id]);
         setStatus("Drew circle on the active surface.");
@@ -2599,8 +2751,10 @@ const handleSelectClick = (event) => {
     }
     return;
   }
-  setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
-  setStatus(`${hit.entity.name} selected${hit.coarse ? " (large mesh bounds pick)" : ""}.`);
+  selectMeshComponent(event, hit);
+  if (hit.entity.kind !== "mesh" || hit.coarse) {
+    setStatus(`${hit.entity.name} selected${hit.coarse ? " (large mesh bounds pick)" : ""}.`);
+  }
 };
 
 const beginTransform = (kind, event) => {
@@ -2808,21 +2962,25 @@ const handlePointerDown = (event) => {
     return;
   }
   if (tool === "pushpull" || tool === "offset" || tool === "followme") {
-    const required = currentSelection().find((entity) => entity.kind === "mesh" && entity.metadata?.planar && !entity.locked);
+    const component = app.componentSelection;
+    const componentEntity = component?.type === "face" ? getEntity(app.project, component.entityId) : null;
+    const required = componentEntity ?? currentSelection().find((entity) => entity.kind === "mesh" && entity.metadata?.planar && !entity.locked);
     if (!required) {
       const hit = pickEntity(event);
       if (hit?.entity.kind === "mesh") {
-        setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
+        selectMeshComponent(event, hit);
       }
-      setStatus(`${tool === "pushpull" ? "Push/Pull" : tool === "offset" ? "Offset" : "Follow Me"} requires a selected planar face.`, "warning");
-      return;
+      if (tool !== "pushpull" || !app.componentSelection) {
+        setStatus(`${tool === "pushpull" ? "Push/Pull" : tool === "offset" ? "Offset" : "Follow Me"} requires a selected face.`, "warning");
+        return;
+      }
     }
     const pointer = getPointer(event);
     app.interaction = {
       kind: tool,
       pointerId: event.pointerId,
       startPointer: pointer,
-      startPoint: pointOnDrawingPlane(event),
+      startPoint: component?.point ?? pointOnDrawingPlane(event),
       faceId: required.id
     };
     elements.canvas.setPointerCapture(event.pointerId);
@@ -3028,6 +3186,10 @@ const handlePointerUp = (event) => {
     if (snapshotDiffers(interaction.before) && commitSnapshot("Move selection", interaction.before)) {
       setStatus("Moved selected entity.");
     } else {
+      const hit = pickEntity(event);
+      if (hit?.entity.kind === "mesh" && !event.shiftKey) {
+        selectMeshComponent(event, hit);
+      }
       requestRender();
     }
     app.snap = null;
@@ -3054,6 +3216,8 @@ const handlePointerUp = (event) => {
   }
   const pointer = getPointer(event);
   if (interaction.kind === "pushpull") {
+    const component = app.componentSelection;
+    const componentFace = component?.type === "face" && component.entityId === interaction.faceId ? component : null;
     const height = (interaction.startPointer.y - pointer.y) * (app.camera.distance / Math.max(app.renderer.height, 1));
     if (Math.abs(height) >= 0.1) {
       try {
@@ -3171,6 +3335,7 @@ const actionHandlers = {
   "view-iso": () => setView("iso"),
   "add-box": addBoxDialog,
   "add-cylinder": addCylinderDialog,
+  "set-circle-segments": setCircleSegmentsDialog,
   "solid-subtract": makeSubtract,
   "reverse-faces": reverseSelectedFaces,
   "print-check": showPrintCheck,
@@ -3474,6 +3639,7 @@ const init = async () => {
     document.body.replaceChildren(element("main", { className: "fatal-error", text: error.message }));
     return;
   }
+  await migrateWorkspace();
   await restoreAutosave();
   loadPreferences();
   bindInterface();
@@ -3489,7 +3655,25 @@ const init = async () => {
     }
   }, 350);
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch((error) => setStatus(`Offline cache registration failed: ${error.message}`, "warning"));
+    let reloadingForUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (navigator.serviceWorker.controller && !reloadingForUpdate) {
+        if (app.dirty) {
+          persistWorkspaceNow()
+            .catch(() => {})
+            .finally(() => {
+              reloadingForUpdate = true;
+              window.location.reload();
+            });
+        } else {
+          reloadingForUpdate = true;
+          window.location.reload();
+        }
+      }
+    });
+    navigator.serviceWorker.register("./sw.js")
+      .then((registration) => registration.update())
+      .catch((error) => setStatus(`Offline cache registration failed: ${error.message}`, "warning"));
   }
 };
 

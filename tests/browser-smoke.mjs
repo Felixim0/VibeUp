@@ -41,8 +41,8 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const page = await context.newPage();
-const errors = [];
-const requests = [];
+  const errors = [];
+  const requests = [];
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -52,11 +52,13 @@ page.on("console", (message) => {
 page.on("requestfailed", (request) => requests.push(`${request.url()} ${request.failure()?.errorText ?? "failed"}`));
 
 try {
-  const response = await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "domcontentloaded" });
+  const addressUrl = `http://127.0.0.1:${address.port}/`;
+  const response = await page.goto(addressUrl, { waitUntil: "domcontentloaded" });
   if (!response?.ok()) {
     throw new Error(`Page request failed with ${response?.status()}.`);
   }
-  await page.waitForTimeout(400);
+  await page.waitForSelector("#viewport", { state: "attached" });
+  await page.waitForTimeout(700);
   const markup = await page.content();
   const viewportExists = await page.locator("#viewport").count();
   if (viewportExists !== 1) {
@@ -72,6 +74,13 @@ try {
   }));
   if (!state.webgl || state.canvasWidth <= 0) {
     throw new Error(`Editor did not initialize a WebGL canvas: ${JSON.stringify(state)}`);
+  }
+  const initialShadows = await page.evaluate(() => {
+    const canvas = document.querySelector("#viewport");
+    return Boolean(canvas);
+  });
+  if (!initialShadows) {
+    throw new Error("Viewport did not initialize for flat-face rendering.");
   }
   const activeMenu = await page.locator(".menu-button.active").textContent();
   if (activeMenu !== "Home") {
@@ -106,6 +115,13 @@ try {
     throw new Error(`Appearance settings were not applied: ${appearanceStatus}`);
   }
   await page.getByText("Home", { exact: true }).click();
+  await page.getByTitle("Set circle segment count").first().click();
+  await page.locator("#modal-dialog input[type='number']").fill("18");
+  await page.getByRole("button", { name: "Set Segments", exact: true }).click();
+  const segmentStatus = await page.locator("#status-message").textContent();
+  if (!segmentStatus?.includes("Circle segments set to 18")) {
+    throw new Error(`Circle segment setting did not apply: ${segmentStatus}`);
+  }
   await page.getByTitle("Add a dimensioned box").first().click();
   await page.locator("#modal-dialog input").nth(0).fill("40");
   await page.locator("#modal-dialog input").nth(1).fill("30");
@@ -132,6 +148,27 @@ try {
   if (!selectionState?.includes("selected")) {
     throw new Error(`Viewport click did not select a mesh: ${selectionState}`);
   }
+  if (!selectionState?.includes("face selected")) {
+    throw new Error(`Viewport click did not select a mesh face: ${selectionState}`);
+  }
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
+  await page.locator("#measurements-input").fill("5");
+  await page.locator("#measurements-input").press("Enter");
+  await page.waitForTimeout(150);
+  const pushPullStatus = await page.locator("#status-message").textContent();
+  if (!pushPullStatus?.includes("Pushpull tool active")) {
+    throw new Error(`Push/Pull activation failed: ${pushPullStatus}`);
+  }
+  const componentSelection = await page.evaluate(() => {
+    const selected = document.querySelector(".outliner-row.selected");
+    return Boolean(selected);
+  });
+  if (!componentSelection) {
+    throw new Error("Clicking a mesh did not retain selection state.");
+  }
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Select and drag (Space)").click();
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
   await page.mouse.down();
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.54, canvasBox.y + canvasBox.height * 0.5, { steps: 4 });
