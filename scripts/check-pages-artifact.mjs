@@ -27,6 +27,7 @@ const required = [
   "icons/cursor-measure.svg",
   "icons/cursor-paint.svg",
   "icons/cursor-erase.svg",
+  "icons/cursor-pushpull.svg",
   "icons/cursor-orbit.svg",
   "icons/cursor-pan.svg",
   "icons/cursor-zoom.svg"
@@ -47,7 +48,7 @@ if (!index.includes('href="./manifest.webmanifest"') || !index.includes('src="./
 if (manifest.start_url !== "./" || manifest.scope !== "./") {
   throw new Error("The web manifest must remain relative for GitHub Pages project sites.");
 }
-if (!worker.includes('"./manifest.webmanifest"') || !worker.includes('"./icons/vibe-up-192.png"') || !worker.includes('"./icons/cursor-select.svg"')) {
+if (!worker.includes('"./manifest.webmanifest"') || !worker.includes('"./icons/vibe-up-192.png"') || !worker.includes('"./icons/cursor-select.svg"') || !worker.includes('"./icons/cursor-pushpull.svg"')) {
   throw new Error("The service worker is missing required Pages PWA assets.");
 }
 if (icon192.size < 500 || icon512.size < 500) {

@@ -14,6 +14,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 
 - **Select is the default pointer tool.** Click a mesh face or visible mesh edge to select that component; drag a selected object directly in the viewport to move it on the clicked face plane.
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Dragging switches to a grab state so active manipulation is unambiguous.
+- Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
 - **Detachable tools.** Use **Detach tools** to open a draggable floating palette with every tool, then attach it again from the palette's close control.
@@ -61,6 +62,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Perspective or parallel projection.
 - Grid and mesh-edge toggles, with flat face colours by default. Face back-sides are shown in blue to make reversed winding visible.
 - Wheel zoom slows proportionally as the camera approaches the model for fine positioning.
+- Orbit is continuous over top and bottom views, with a pole-safe camera basis so it does not block or snap when passing above a model.
 - Light theme by default plus a dark-theme option.
 - Custom workspace, grid, edge, selection colours, and edge thickness.
 - Yellow selection by default, configurable from Appearance.
@@ -76,7 +78,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 | `T`, `D`, `B`, `E` | Tape, Dimension, Paint, Eraser |
 | `O`, `H`, `Z`, `Shift+Z` | Orbit, Pan, Zoom, Zoom Extents |
 | `Control` while drawing | Lock straight-line inference |
-| `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` | Undo, Redo |
+| `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` | Undo/redo model changes without moving the current camera |
 | `Ctrl/Cmd+S`, `Ctrl/Cmd+O` | Save, Open |
 | `Delete`, `Escape` | Delete selection, Cancel operation |
 

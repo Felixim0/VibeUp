@@ -228,6 +228,43 @@ test("zoom becomes less sensitive near the model", () => {
   assert.ok(close.distance > 0);
 });
 
+test("orbit moves continuously through the top pole", () => {
+  const camera = new OrbitCamera();
+  camera.pitch = Math.PI / 2 - 0.01;
+  camera.orbit(0, -10);
+  assert.ok(camera.pitch > Math.PI / 2);
+  const position = camera.getPosition();
+  const up = camera.getUp();
+  assert.ok(position.every(Number.isFinite));
+  assert.ok(up.every(Number.isFinite));
+  assert.ok(Math.hypot(...up) > 0.99);
+  camera.orbit(0, 30);
+  assert.ok(camera.pitch < Math.PI / 2);
+});
+
+test("orbit moves continuously through the bottom pole", () => {
+  const camera = new OrbitCamera();
+  camera.pitch = -Math.PI / 2 + 0.01;
+  camera.orbit(0, 10);
+  assert.ok(camera.pitch < -Math.PI / 2);
+  const { projection, view } = camera.getMatrices(1.5);
+  assert.ok(projection.every(Number.isFinite));
+  assert.ok(view.every(Number.isFinite));
+  camera.orbit(0, -30);
+  assert.ok(camera.pitch > -Math.PI / 2);
+});
+
+test("camera pan remains usable at both poles", () => {
+  const camera = new OrbitCamera();
+  for (const pitch of [Math.PI / 2, -Math.PI / 2]) {
+    camera.pitch = pitch;
+    const originalTarget = Array.from(camera.target);
+    camera.pan(20, -15, 800);
+    assert.notDeepEqual(camera.target, originalTarget);
+    assert.ok(camera.target.every(Number.isFinite));
+  }
+});
+
 test("a vertical-face rectangle remains on its plane after an exact extrusion", () => {
   const rectangle = createRectangleEntity([10, 0, 0], [10, 20, 15], [1, 0, 0]);
   extrudeProfile(rectangle, 8);

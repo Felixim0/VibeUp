@@ -72,7 +72,7 @@ const TOOL_CURSORS = {
   polygon: "url('./icons/cursor-draw.svg') 7 25, crosshair",
   arc: "url('./icons/cursor-draw.svg') 7 25, crosshair",
   freehand: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  pushpull: "url('./icons/cursor-draw.svg') 7 25, crosshair",
+  pushpull: "url('./icons/cursor-pushpull.svg') 16 16, crosshair",
   offset: "url('./icons/cursor-draw.svg') 7 25, crosshair",
   followme: "url('./icons/cursor-draw.svg') 7 25, crosshair",
   tape: "url('./icons/cursor-measure.svg') 16 16, crosshair",
@@ -427,8 +427,9 @@ const undo = () => {
     setStatus("Nothing to undo.");
     return;
   }
+  const liveCamera = app.camera.serialize();
   app.future.push({ ...snapshot(), label: previous.label });
-  restoreSnapshot(previous);
+  restoreSnapshot({ ...previous, camera: liveCamera });
   setDirty();
   setStatus(`Undid ${previous.label}.`);
 };
@@ -439,8 +440,9 @@ const redo = () => {
     setStatus("Nothing to redo.");
     return;
   }
+  const liveCamera = app.camera.serialize();
   app.history.push({ ...snapshot(), label: following.label });
-  restoreSnapshot(following);
+  restoreSnapshot({ ...following, camera: liveCamera });
   setDirty();
   setStatus(`Redid ${following.label}.`);
 };

@@ -1,4 +1,4 @@
-const CACHE_NAME = "vibe-up-static-v10";
+const CACHE_NAME = "vibe-up-static-v12";
 const CACHE_PREFIX = "vibe-up-static-";
 const APP_SHELL = [
   "./",
@@ -24,6 +24,7 @@ const APP_SHELL = [
   "./icons/cursor-measure.svg",
   "./icons/cursor-paint.svg",
   "./icons/cursor-erase.svg",
+  "./icons/cursor-pushpull.svg",
   "./icons/cursor-orbit.svg",
   "./icons/cursor-pan.svg",
   "./icons/cursor-zoom.svg"

@@ -36,7 +36,7 @@ export class OrbitCamera {
   getMatrices(aspect) {
     const far = Math.max(10000, this.distance * 40);
     const near = Math.max(0.01, this.distance / 10000);
-    const view = mat4LookAt(this.getPosition(), this.target, [0, 0, 1]);
+    const view = mat4LookAt(this.getPosition(), this.target, this.getUp());
     let projection;
 
     if (this.projectionType === "parallel") {
@@ -58,12 +58,23 @@ export class OrbitCamera {
 
   orbit(deltaX, deltaY) {
     this.yaw -= deltaX * 0.008;
-    this.pitch = Math.max(-88 * DEGREE, Math.min(88 * DEGREE, this.pitch - deltaY * 0.008));
+    this.pitch -= deltaY * 0.008;
+    this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    this.pitch = ((this.pitch + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+  }
+
+  getUp() {
+    const horizontal = Math.abs(Math.cos(this.pitch));
+    const worldUp = Math.cos(this.pitch) >= 0 ? [0, 0, 1] : [0, 0, -1];
+    const poleTangent = [-Math.sin(this.yaw), Math.cos(this.yaw), 0];
+    // Blend toward a horizontal up vector at the poles so lookAt never receives
+    // an up vector parallel to the viewing direction.
+    return normalize3(add3(scale3(worldUp, horizontal), scale3(poleTangent, 1 - horizontal)));
   }
 
   pan(deltaX, deltaY, viewportHeight) {
     const direction = this.getDirection();
-    const right = normalize3(cross3(direction, [0, 0, 1]));
+    const right = normalize3(cross3(direction, this.getUp()));
     const up = normalize3(cross3(right, direction));
     const distancePerPixel = (this.distance * 0.82) / Math.max(viewportHeight, 1);
     this.target = add3(

@@ -41,8 +41,32 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const page = await context.newPage();
-  const errors = [];
-  const requests = [];
+const readAutosavedCamera = () => page.evaluate(async () => new Promise((resolveSavedCamera, rejectSavedCamera) => {
+  const request = indexedDB.open("vibe-up");
+  request.onerror = () => rejectSavedCamera(request.error ?? new Error("Could not open local workspace storage."));
+  request.onsuccess = () => {
+    const database = request.result;
+    const transaction = database.transaction("workspace", "readonly");
+    const getWorkspace = transaction.objectStore("workspace").get("autosave");
+    getWorkspace.onerror = () => {
+      database.close();
+      rejectSavedCamera(getWorkspace.error ?? new Error("Could not read local workspace storage."));
+    };
+    getWorkspace.onsuccess = () => {
+      database.close();
+      resolveSavedCamera(getWorkspace.result?.camera ?? null);
+    };
+  };
+}));
+const saveLiveCamera = async (canvasBox) => {
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+  await page.mouse.down({ button: "right" });
+  await page.mouse.up({ button: "right" });
+  await page.waitForTimeout(900);
+  return readAutosavedCamera();
+};
+const errors = [];
+const requests = [];
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -58,7 +82,8 @@ try {
     throw new Error(`Page request failed with ${response?.status()}.`);
   }
   await page.waitForSelector("#viewport", { state: "attached" });
-  await page.waitForTimeout(700);
+  await page.waitForFunction(() => Boolean(navigator.serviceWorker?.controller), null, { timeout: 5000 });
+  await page.waitForSelector("#viewport", { state: "attached" });
   const markup = await page.content();
   const viewportExists = await page.locator("#viewport").count();
   if (viewportExists !== 1) {
@@ -136,6 +161,36 @@ try {
   if (modelState.outlinerRows < 2 || !modelState.selected?.includes("Box")) {
     throw new Error(`Box interaction failed: ${JSON.stringify(modelState)}`);
   }
+  const undoCanvasBox = await page.locator("#viewport").boundingBox();
+  if (!undoCanvasBox) {
+    throw new Error("Viewport has no layout box for undo verification.");
+  }
+  await page.getByText("Camera", { exact: true }).click();
+  await page.getByTitle("Front view").click();
+  await page.waitForTimeout(900);
+  const cameraBeforeUndo = await readAutosavedCamera();
+  if (!cameraBeforeUndo) {
+    throw new Error("Camera state was not saved before undo verification.");
+  }
+  await page.keyboard.press("Control+Z");
+  const rowsAfterUndo = await page.locator(".outliner-row").count();
+  const cameraAfterUndo = await saveLiveCamera(undoCanvasBox);
+  if (rowsAfterUndo !== modelState.outlinerRows - 1) {
+    throw new Error(`Undo did not revert the added box: ${rowsAfterUndo} outliner rows.`);
+  }
+  if (JSON.stringify(cameraAfterUndo) !== JSON.stringify(cameraBeforeUndo)) {
+    throw new Error("Undo changed the active camera.");
+  }
+  await page.keyboard.press("Control+Shift+Z");
+  const rowsAfterRedo = await page.locator(".outliner-row").count();
+  const cameraAfterRedo = await saveLiveCamera(undoCanvasBox);
+  if (rowsAfterRedo !== modelState.outlinerRows) {
+    throw new Error(`Redo did not restore the added box: ${rowsAfterRedo} outliner rows.`);
+  }
+  if (JSON.stringify(cameraAfterRedo) !== JSON.stringify(cameraBeforeUndo)) {
+    throw new Error("Redo changed the active camera.");
+  }
+  await page.getByTitle("Iso view").click();
   await page.getByRole("button", { name: "Tools", exact: true }).click();
   await page.getByTitle("Select (Space)").click();
   const canvas = page.locator("#viewport");
@@ -153,6 +208,10 @@ try {
   }
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
+  const pushPullCursor = await page.locator("#viewport").evaluate((canvas) => canvas.style.cursor);
+  if (!pushPullCursor.includes("cursor-pushpull.svg")) {
+    throw new Error(`The Push/Pull cursor was not applied: ${pushPullCursor}`);
+  }
   await page.locator("#measurements-input").fill("5");
   await page.locator("#measurements-input").press("Enter");
   await page.waitForTimeout(150);
