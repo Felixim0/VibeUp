@@ -62,7 +62,7 @@ body.theme-dark .outliner-row { color: #d2e2e6; }
 body.theme-dark .tag-row:hover,
 body.theme-dark .scene-row:hover,
 body.theme-dark .outliner-row:hover { border-color: #3a5765; background: #19313f; }
-body.theme-dark .outliner-row.selected { background: #6c5700; color: #fff5bf; }
+body.theme-dark .outliner-row.selected { background: #4b432d; color: #f0e5bd; }
 body.theme-dark .material-card { border-color: #355260; background: #172e3b; color: #d9e8eb; }
 body.theme-dark .status-bar { border-color: #365060; background: #0e202b; color: #98aab3; }
 body.theme-dark .modal-dialog { border-color: #496573; background: #132a37; color: #e7f2f5; }
@@ -692,8 +692,8 @@ button {
 }
 
 .outliner-row.selected {
-  background: #fff0af;
-  color: #5b4800;
+  background: #e8dfc8;
+  color: #4b412b;
 }
 
 .outliner-kind {

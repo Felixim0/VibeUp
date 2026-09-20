@@ -13,7 +13,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 ## Core workflow
 
 - **Select is the default pointer tool.** Click a mesh face or visible mesh edge to select that component; drag a selected object directly in the viewport to move it on the clicked face plane.
-- **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Dragging switches to a grab state so active manipulation is unambiguous.
+- **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Non-Select cursor art sits down-left of the exact snap point so it never hides the inference marker.
 - Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
@@ -47,10 +47,10 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Draw on the ground plane or click a model face to draw directly on that face plane.
 - Circle segment count is configurable from **Segments** on Home or Draw, and can be entered as `radius, segments` in Measurements.
 - Circular faces render as one plain face; their triangles are retained internally only for robust geometry and STL export.
-- Select individual mesh faces and visible mesh edges. A selected face is highlighted independently, and Push/Pull moves only that face.
+- Select individual mesh faces and visible mesh edges. A selected component receives a subtle local highlight rather than recolouring the whole mesh. Delete removes a selected face, removes a standalone line, or hides a selected mesh edge without deleting its neighbouring faces.
 - Push/Pull of a circular face through an axis-aligned Box produces a closed circular through-hole rather than an overlapping cylinder. Unsupported placements fail safely rather than creating an overlapping solid.
 - Dimensioned box and cylinder creation.
-- Push/Pull planar faces into solids.
+- Push/Pull is click-move-click: click a face, inspect the live shape preview as the pointer moves, then click again to commit. Escape cancels the preview.
 - Offset planar faces and create a straight-vector Follow Me sweep.
 - Move, protractor rotate, scale, erase, paint, and reverse faces.
 - Experimental subtract for compatible closed meshes. Axis-aligned nested Box primitives produce a checked closed result; other meshes use a guarded BSP path.
@@ -65,7 +65,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Orbit is continuous over top and bottom views, with a pole-safe camera basis so it does not block or snap when passing above a model.
 - Light theme by default plus a dark-theme option.
 - Custom workspace, grid, edge, selection colours, and edge thickness.
-- Yellow selection by default, configurable from Appearance.
+- A muted gold selection accent by default, configurable from Appearance.
 - First-run Getting Started guide with a persistent opt-out and manual re-opening from Appearance.
 
 ## Shortcuts
@@ -77,6 +77,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 | `M`, `Q`, `S`, `P`, `F` | Move, Rotate, Scale, Push/Pull, Offset |
 | `T`, `D`, `B`, `E` | Tape, Dimension, Paint, Eraser |
 | `O`, `H`, `Z`, `Shift+Z` | Orbit, Pan, Zoom, Zoom Extents |
+| `Control` + Orbit drag | Pan the camera in the view plane |
 | `Control` while drawing | Lock straight-line inference |
 | `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` | Undo/redo model changes without moving the current camera |
 | `Ctrl/Cmd+S`, `Ctrl/Cmd+O` | Save, Open |

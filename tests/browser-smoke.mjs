@@ -206,18 +206,40 @@ try {
   if (!selectionState?.includes("face selected")) {
     throw new Error(`Viewport click did not select a mesh face: ${selectionState}`);
   }
+  const rowsBeforeFaceDelete = await page.locator(".outliner-row").count();
+  await page.keyboard.press("Delete");
+  const rowsAfterFaceDelete = await page.locator(".outliner-row").count();
+  const faceDeleteStatus = await page.locator("#status-message").textContent();
+  if (rowsAfterFaceDelete !== rowsBeforeFaceDelete || !faceDeleteStatus?.includes("Deleted face")) {
+    throw new Error(`Deleting a selected face removed the wrong model data: ${JSON.stringify({ rowsBeforeFaceDelete, rowsAfterFaceDelete, faceDeleteStatus })}`);
+  }
+  await page.keyboard.press("Control+Z");
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
   const pushPullCursor = await page.locator("#viewport").evaluate((canvas) => canvas.style.cursor);
   if (!pushPullCursor.includes("cursor-pushpull.svg")) {
     throw new Error(`The Push/Pull cursor was not applied: ${pushPullCursor}`);
   }
-  await page.locator("#measurements-input").fill("5");
-  await page.locator("#measurements-input").press("Enter");
-  await page.waitForTimeout(150);
+  if (!pushPullCursor.includes("23 0")) {
+    throw new Error(`The Push/Pull cursor is not positioned down-left of the snap point: ${pushPullCursor}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.43, { steps: 4 });
+  const pushPullPreview = await page.locator("#status-message").textContent();
+  if (!pushPullPreview?.includes("Click to apply")) {
+    throw new Error(`Push/Pull did not produce a live preview: ${pushPullPreview}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.43 } });
   const pushPullStatus = await page.locator("#status-message").textContent();
-  if (!pushPullStatus?.includes("Pushpull tool active")) {
-    throw new Error(`Push/Pull activation failed: ${pushPullStatus}`);
+  if (!pushPullStatus?.includes("Applied Push/Pull")) {
+    throw new Error(`Push/Pull did not commit on its second click: ${pushPullStatus}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.46, { steps: 3 });
+  await page.keyboard.press("Escape");
+  const cancelledPushPull = await page.locator("#status-message").textContent();
+  if (!cancelledPushPull?.includes("Operation cancelled")) {
+    throw new Error(`Escape did not cancel a Push/Pull preview: ${cancelledPushPull}`);
   }
   const componentSelection = await page.evaluate(() => {
     const selected = document.querySelector(".outliner-row.selected");
@@ -225,6 +247,22 @@ try {
   });
   if (!componentSelection) {
     throw new Error("Clicking a mesh did not retain selection state.");
+  }
+  await page.getByText("Camera", { exact: true }).click();
+  await page.getByTitle("Orbit camera (O)").click();
+  const cameraBeforeControlOrbit = await saveLiveCamera(canvasBox);
+  await page.keyboard.down("Control");
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.56, canvasBox.y + canvasBox.height * 0.46, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  const cameraAfterControlOrbit = await saveLiveCamera(canvasBox);
+  if (cameraAfterControlOrbit.yaw !== cameraBeforeControlOrbit.yaw || cameraAfterControlOrbit.pitch !== cameraBeforeControlOrbit.pitch) {
+    throw new Error("Control-orbit changed camera rotation instead of panning.");
+  }
+  if (JSON.stringify(cameraAfterControlOrbit.target) === JSON.stringify(cameraBeforeControlOrbit.target)) {
+    throw new Error("Control-orbit did not pan the camera target.");
   }
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Select and drag (Space)").click();
@@ -304,7 +342,7 @@ try {
   await page.locator("#measurements-input").press("Enter");
   const resetStatus = await page.locator("#status-message").textContent();
   const resetRows = await page.locator(".outliner-row").count();
-  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked planar face")) {
+  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked face before using Push/Pull")) {
     throw new Error(`New project did not clear transient drawing state: ${JSON.stringify({ resetStatus, resetRows })}`);
   }
   await page.getByText("Home", { exact: true }).click();

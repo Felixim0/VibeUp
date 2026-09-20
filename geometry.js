@@ -54,7 +54,7 @@ export const DEFAULT_APPEARANCE = {
   canvasColor: "#eef3f5",
   gridColor: "#aebfc7",
   edgeColor: "#334550",
-  selectionColor: "#f2bf2f",
+  selectionColor: "#c5a255",
   edgeWidth: 2
 };
 
@@ -678,9 +678,17 @@ export const allRenderableEntities = (project) => project.entities.filter((entit
   isEntityVisible(project, entity)
 ));
 
-export const edgeIndicesForMesh = (vertices, indices) => {
+const meshPointKey = (point) => point.map((value) => Math.round(value * 1000000)).join(":");
+
+export const meshEdgeKey = (start, end) => {
+  const first = meshPointKey(start);
+  const second = meshPointKey(end);
+  return first < second ? `${first}|${second}` : `${second}|${first}`;
+};
+
+export const edgeIndicesForMesh = (vertices, indices, hiddenEdges = []) => {
   const edges = new Map();
-  const keyForVertex = (vertexIndex) => localPointAt(vertices, vertexIndex).map((value) => Math.round(value * 1000000)).join(":");
+  const hidden = new Set(Array.isArray(hiddenEdges) ? hiddenEdges : []);
   for (let offset = 0; offset < indices.length; offset += 3) {
     const triangle = [indices[offset], indices[offset + 1], indices[offset + 2]];
     const points = triangle.map((vertexIndex) => localPointAt(vertices, vertexIndex));
@@ -688,9 +696,7 @@ export const edgeIndicesForMesh = (vertices, indices) => {
     for (let edge = 0; edge < 3; edge += 1) {
       const first = triangle[edge];
       const second = triangle[(edge + 1) % 3];
-      const firstKey = keyForVertex(first);
-      const secondKey = keyForVertex(second);
-      const key = firstKey < secondKey ? `${firstKey}|${secondKey}` : `${secondKey}|${firstKey}`;
+      const key = meshEdgeKey(points[edge], points[(edge + 1) % 3]);
       const record = edges.get(key) ?? { indices: [first, second], normals: [] };
       record.normals.push(normal);
       edges.set(key, record);
@@ -698,6 +704,7 @@ export const edgeIndicesForMesh = (vertices, indices) => {
   }
 
   return Array.from(edges.values())
+    .filter((edge) => !hidden.has(meshEdgeKey(localPointAt(vertices, edge.indices[0]), localPointAt(vertices, edge.indices[1]))))
     .filter((edge) => edge.normals.length === 1 || edge.normals.some((normal) => dot3(normal, edge.normals[0]) < 0.9999))
     .flatMap((edge) => edge.indices);
 };
@@ -765,6 +772,64 @@ export const getMeshFaceRegion = (project, entity, triangleIndex) => {
   const triangleIndices = Array.from(region).sort((first, second) => first - second);
   const vertexIndices = Array.from(new Set(triangleIndices.flatMap((index) => entity.indices.slice(index * 3, index * 3 + 3))));
   return { triangleIndices, vertexIndices, normal: seedNormal, point: seedA };
+};
+
+export const hideMeshEdge = (project, entity, start, end) => {
+  if (entity.kind !== "mesh") {
+    throw new Error("Only mesh edges can be deleted.");
+  }
+  const inverseWorldTransform = mat4Invert(entityWorldMatrix(project, entity));
+  if (!inverseWorldTransform) {
+    throw new Error("The edge world transform cannot be inverted.");
+  }
+  const localStart = transformPoint(inverseWorldTransform, start);
+  const localEnd = transformPoint(inverseWorldTransform, end);
+  const key = meshEdgeKey(localStart, localEnd);
+  const hiddenEdges = new Set(entity.metadata?.hiddenEdges ?? []);
+  hiddenEdges.add(key);
+  entity.metadata = { ...entity.metadata, hiddenEdges: Array.from(hiddenEdges) };
+  return true;
+};
+
+export const removeMeshFaces = (entity, triangleIndices) => {
+  if (entity.kind !== "mesh") {
+    throw new Error("Only mesh faces can be deleted.");
+  }
+  const removed = new Set((triangleIndices ?? []).filter((triangleIndex) => (
+    Number.isInteger(triangleIndex) && triangleIndex >= 0 && triangleIndex < entity.indices.length / 3
+  )));
+  if (removed.size === 0) {
+    return { removed: 0, remaining: entity.indices.length / 3 };
+  }
+
+  const retainedIndices = [];
+  for (let triangleIndex = 0; triangleIndex < entity.indices.length / 3; triangleIndex += 1) {
+    if (!removed.has(triangleIndex)) {
+      retainedIndices.push(...entity.indices.slice(triangleIndex * 3, triangleIndex * 3 + 3));
+    }
+  }
+
+  const remappedVertices = [];
+  const remap = new Map();
+  const remappedIndices = retainedIndices.map((vertexIndex) => {
+    if (!remap.has(vertexIndex)) {
+      const nextIndex = remap.size;
+      remap.set(vertexIndex, nextIndex);
+      remappedVertices.push(...localPointAt(entity.vertices, vertexIndex));
+    }
+    return remap.get(vertexIndex);
+  });
+  const metadata = { ...(entity.metadata ?? {}) };
+  delete metadata.dimensions;
+  delete metadata.profilePoints;
+  delete metadata.profileNormal;
+  delete metadata.radius;
+  delete metadata.center;
+  delete metadata.extrusionHeight;
+  entity.vertices = remappedVertices;
+  entity.indices = remappedIndices;
+  entity.metadata = { ...metadata, primitive: "edited-mesh", planar: false, solid: false };
+  return { removed: removed.size, remaining: remappedIndices.length / 3 };
 };
 
 export const moveMeshFace = (project, entity, faceRegion, distance) => {

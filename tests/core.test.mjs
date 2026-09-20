@@ -13,10 +13,12 @@ import {
   createEmptyProject,
   createRectangleEntity,
   createSweepGeometry,
+  edgeIndicesForMesh,
   entityBounds,
   extrudeProfile,
   getEntity,
   getMeshFaceRegion,
+  hideMeshEdge,
   explodeGroup,
   makeGroup,
   moveMeshFace,
@@ -24,6 +26,7 @@ import {
   meshWorldVertices,
   projectBounds,
   reverseMeshFaces,
+  removeMeshFaces,
   rotateEntityAroundAxis
 } from "../geometry.js";
 import { add3, dot3, mat4FromTransform, mat4Identity, mat4Invert, mat4Multiply, mat4RotationAroundPoint, normalize3, scale3, subtract3, transformPoint } from "../math.js";
@@ -213,6 +216,31 @@ test("selected box face moves independently with Push/Pull", () => {
   const bounds = entityBounds(project, box);
   assert.equal(bounds.max[2], 30);
   assert.equal(bounds.min[2], 0);
+});
+
+test("deleting a selected mesh face preserves the remaining faces", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(20, 20, 20));
+  const topFace = getMeshFaceRegion(project, box, 2);
+  assert.ok(topFace);
+  const result = removeMeshFaces(box, topFace.triangleIndices);
+  assert.equal(result.removed, 2);
+  assert.equal(result.remaining, 10);
+  assert.equal(box.indices.length / 3, 10);
+  assert.equal(box.vertices.length / 3, 8);
+  assert.equal(box.metadata.solid, false);
+});
+
+test("deleting a selected mesh edge hides only that edge", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(20, 20, 20));
+  const originalEdges = edgeIndicesForMesh(box.vertices, box.indices);
+  const start = [-10, -10, 0];
+  const end = [10, -10, 0];
+  assert.equal(hideMeshEdge(project, box, start, end), true);
+  const visibleEdges = edgeIndicesForMesh(box.vertices, box.indices, box.metadata.hiddenEdges);
+  assert.equal(visibleEdges.length, originalEdges.length - 2);
+  assert.equal(box.indices.length / 3, 12);
 });
 
 test("zoom becomes less sensitive near the model", () => {

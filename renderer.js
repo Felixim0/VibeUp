@@ -34,6 +34,7 @@ uniform vec3 uColor;
 uniform vec3 uLightDirection;
 uniform bool uShadows;
 uniform vec3 uBackfaceColor;
+uniform float uOpacity;
 uniform bool uSectionEnabled;
 uniform vec3 uSectionPoint;
 uniform vec3 uSectionNormal;
@@ -47,7 +48,7 @@ void main() {
   if (!gl_FrontFacing) {
     color = uBackfaceColor;
   }
-  outputColor = vec4(color, 1.0);
+  outputColor = vec4(color, uOpacity);
 }`;
 
 const lineVertexSource = `#version 300 es
@@ -252,6 +253,7 @@ export class Renderer {
         "uLightDirection",
         "uShadows",
         "uBackfaceColor",
+        "uOpacity",
         "uSectionEnabled",
         "uSectionPoint",
         "uSectionNormal"
@@ -342,7 +344,7 @@ export class Renderer {
 
   ensureMesh(entity) {
     const existing = this.meshCache.get(entity.id);
-    if (existing && existing.vertices === entity.vertices && existing.indicesSource === entity.indices) {
+    if (existing && existing.vertices === entity.vertices && existing.indicesSource === entity.indices && existing.hiddenEdgesSource === entity.metadata?.hiddenEdges) {
       return existing;
     }
     if (existing) {
@@ -351,7 +353,7 @@ export class Renderer {
     const { gl } = this;
     const vertexData = new Float32Array(entity.vertices);
     const indexData = vertexData.length / 3 > 65535 ? new Uint32Array(entity.indices) : new Uint16Array(entity.indices);
-    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices);
+    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.hiddenEdges);
     const edgeStartData = new Float32Array((edgeSource.length / 2) * 3);
     const edgeEndData = new Float32Array((edgeSource.length / 2) * 3);
     for (let index = 0; index < edgeSource.length; index += 2) {
@@ -364,6 +366,7 @@ export class Renderer {
     const record = {
       vertices: entity.vertices,
       indicesSource: entity.indices,
+      hiddenEdgesSource: entity.metadata?.hiddenEdges,
       position: makeBuffer(gl, gl.ARRAY_BUFFER, vertexData),
       normal: makeBuffer(gl, gl.ARRAY_BUFFER, new Float32Array(computeNormals(entity.vertices, entity.indices))),
       indices: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indexData),
@@ -457,19 +460,20 @@ export class Renderer {
     gl.vertexAttribPointer(meshProgram.attributes.aNormal, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, record.indices);
     const color = hexToRgb(material?.color);
-    const selectedColor = selected && !componentSelection ? hexToRgb(settings.appearance.selectionColor) : color;
+    const objectSelected = selected && !componentSelection;
     gl.uniformMatrix4fv(meshProgram.uniforms.uModel, false, model);
     gl.uniformMatrix4fv(meshProgram.uniforms.uViewProjection, false, viewProjection);
-    gl.uniform3fv(meshProgram.uniforms.uColor, selectedColor);
+    gl.uniform3fv(meshProgram.uniforms.uColor, color);
     gl.uniform3fv(meshProgram.uniforms.uLightDirection, normalize3([-0.4, -0.55, 0.73]));
     gl.uniform1i(meshProgram.uniforms.uShadows, settings.shadowsVisible ? 1 : 0);
     gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, [0.62, 0.72, 0.95]);
+    gl.uniform1f(meshProgram.uniforms.uOpacity, 1);
     gl.uniform1i(meshProgram.uniforms.uSectionEnabled, section ? 1 : 0);
     gl.uniform3fv(meshProgram.uniforms.uSectionPoint, section?.point ?? [0, 0, 0]);
     gl.uniform3fv(meshProgram.uniforms.uSectionNormal, section?.normal ?? [0, 0, 1]);
     gl.drawElements(gl.TRIANGLES, record.indexCount, record.indexType, 0);
 
-    if (settings.edgesVisible || selected) {
+    if (settings.edgesVisible || objectSelected) {
       const { edgeProgram } = this;
       gl.useProgram(edgeProgram.program);
       this.resetVertexAttributes();
@@ -483,9 +487,9 @@ export class Renderer {
       gl.vertexAttribDivisor(edgeProgram.attributes.aEnd, 1);
       gl.uniformMatrix4fv(edgeProgram.uniforms.uModel, false, model);
       gl.uniformMatrix4fv(edgeProgram.uniforms.uViewProjection, false, viewProjection);
-      gl.uniform4fv(edgeProgram.uniforms.uColor, selected ? colorWithAlpha(settings.appearance.selectionColor, 1) : colorWithAlpha(settings.appearance.edgeColor, 0.92));
+      gl.uniform4fv(edgeProgram.uniforms.uColor, objectSelected ? colorWithAlpha(settings.appearance.selectionColor, 0.82) : colorWithAlpha(settings.appearance.edgeColor, 0.92));
       gl.uniform2f(edgeProgram.uniforms.uViewport, this.width, this.height);
-      gl.uniform1f(edgeProgram.uniforms.uThickness, Math.max(selected ? 2.5 : 1, settings.appearance.edgeWidth) * 2 * this.pixelRatio);
+      gl.uniform1f(edgeProgram.uniforms.uThickness, Math.max(objectSelected ? 1.25 : 1, settings.appearance.edgeWidth) * 2 * this.pixelRatio);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, record.edgeCount);
       this.resetVertexAttributes();
     }
@@ -509,6 +513,7 @@ export class Renderer {
       gl.uniform3fv(meshProgram.uniforms.uLightDirection, [0, 0, 1]);
       gl.uniform1i(meshProgram.uniforms.uShadows, 0);
       gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, hexToRgb(settings.appearance.selectionColor));
+      gl.uniform1f(meshProgram.uniforms.uOpacity, 0.34);
       gl.uniform1i(meshProgram.uniforms.uSectionEnabled, section ? 1 : 0);
       gl.uniform3fv(meshProgram.uniforms.uSectionPoint, section?.point ?? [0, 0, 0]);
       gl.uniform3fv(meshProgram.uniforms.uSectionNormal, section?.normal ?? [0, 0, 1]);
@@ -519,8 +524,8 @@ export class Renderer {
     if (componentSelection?.type === "edge") {
       const endpoints = new Float32Array([...componentSelection.start, ...componentSelection.end]);
       const edgeBuffer = makeBuffer(gl, gl.ARRAY_BUFFER, endpoints, gl.DYNAMIC_DRAW);
-      this.useLineProgram(viewProjection, Math.max(7, settings.appearance.edgeWidth * 3));
-      this.drawLines(edgeBuffer, 2, mat4Identity(), colorWithAlpha(settings.appearance.selectionColor, 1), gl.LINES);
+      this.useLineProgram(viewProjection, Math.max(4, settings.appearance.edgeWidth * 2));
+      this.drawLines(edgeBuffer, 2, mat4Identity(), colorWithAlpha(settings.appearance.selectionColor, 0.88), gl.LINES);
       gl.deleteBuffer(edgeBuffer);
     }
   }
@@ -529,7 +534,7 @@ export class Renderer {
     const record = this.ensureLine(entity);
     this.useLineProgram(viewProjection, Math.max(4, appearance.edgeWidth * 2));
     this.gl.lineWidth(Math.max(1, appearance.edgeWidth * this.pixelRatio));
-    this.drawLines(record.position, record.count, model, selected ? colorWithAlpha(appearance.selectionColor, 1) : colorWithAlpha(appearance.edgeColor, 1));
+    this.drawLines(record.position, record.count, model, selected ? colorWithAlpha(appearance.selectionColor, 0.82) : colorWithAlpha(appearance.edgeColor, 1));
   }
 
   drawSection(section, viewProjection) {

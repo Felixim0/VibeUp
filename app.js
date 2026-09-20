@@ -14,6 +14,7 @@ import {
   cutCircularHoleThroughBox,
   edgeIndicesForMesh,
   getMeshFaceRegion,
+  hideMeshEdge,
   createCylinderEntity,
   createDemoProject,
   createEdgeEntity,
@@ -36,6 +37,7 @@ import {
   planeBasis,
   projectBounds,
   removeEntity,
+  removeMeshFaces,
   reverseMeshFaces,
   rotateEntityAroundAxis,
   sweepProfile
@@ -64,32 +66,32 @@ const LARGE_PICK_TRIANGLE_COUNT = 120000;
 const MAX_SNAP_MESH_TRIANGLES = 20000;
 const TOOL_CURSORS = {
   select: "url('./icons/cursor-select.svg') 5 3, default",
-  move: "url('./icons/cursor-move.svg') 16 16, move",
-  rotate: "url('./icons/cursor-rotate.svg') 16 16, crosshair",
-  line: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  rectangle: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  circle: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  polygon: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  arc: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  freehand: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  pushpull: "url('./icons/cursor-pushpull.svg') 16 16, crosshair",
-  offset: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  followme: "url('./icons/cursor-draw.svg') 7 25, crosshair",
-  tape: "url('./icons/cursor-measure.svg') 16 16, crosshair",
-  protractor: "url('./icons/cursor-measure.svg') 16 16, crosshair",
-  dimension: "url('./icons/cursor-measure.svg') 16 16, crosshair",
+  move: "url('./icons/cursor-move.svg') 23 0, move",
+  rotate: "url('./icons/cursor-rotate.svg') 23 0, crosshair",
+  line: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  rectangle: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  circle: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  polygon: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  arc: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  freehand: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  pushpull: "url('./icons/cursor-pushpull.svg') 23 0, crosshair",
+  offset: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  followme: "url('./icons/cursor-draw.svg') 23 0, crosshair",
+  tape: "url('./icons/cursor-measure.svg') 23 0, crosshair",
+  protractor: "url('./icons/cursor-measure.svg') 23 0, crosshair",
+  dimension: "url('./icons/cursor-measure.svg') 23 0, crosshair",
   text: "text",
   axes: "crosshair",
   section: "crosshair",
-  eraser: "url('./icons/cursor-erase.svg') 8 22, crosshair",
-  paint: "url('./icons/cursor-paint.svg') 16 21, crosshair",
-  orbit: "url('./icons/cursor-orbit.svg') 16 16, grab",
-  pan: "url('./icons/cursor-pan.svg') 16 16, grab",
-  zoom: "url('./icons/cursor-zoom.svg') 13 13, zoom-in",
+  eraser: "url('./icons/cursor-erase.svg') 23 0, crosshair",
+  paint: "url('./icons/cursor-paint.svg') 23 0, crosshair",
+  orbit: "url('./icons/cursor-orbit.svg') 23 0, grab",
+  pan: "url('./icons/cursor-pan.svg') 23 0, grab",
+  zoom: "url('./icons/cursor-zoom.svg') 23 0, zoom-in",
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Click an entity to select it. Shift-click adds or removes entities from the selection.",
+  select: "Click a face, edge, or entity to select it. Delete removes the selected component; Shift-click adds or removes entities from the selection.",
   line: "Click a start point, then click an end point. Type a length in Measurements for an exact line.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
@@ -101,7 +103,7 @@ const TOOL_HINTS = {
   move: "Select entities, then drag on the ground plane. Measurements accepts X, Y, Z translation.",
   rotate: "Select an object, then click a face or edge to place a protractor. Move the pointer to set its rotation angle; click to apply.",
   scale: "Select entities, then drag left or right to scale uniformly. Measurements accepts one factor or X, Y, Z.",
-  pushpull: "Select a planar face, then drag vertically or enter an exact height in Measurements.",
+  pushpull: "Click a planar face, move to preview the extrusion, then click again to apply. Measurements accepts an exact height.",
   offset: "Select a planar face, then drag or enter an exact offset distance in Measurements.",
   followme: "Select a planar face, then drag a path or enter an X, Y, Z sweep vector in Measurements.",
   tape: "Click two points to create a tape-measure annotation in millimetres.",
@@ -110,7 +112,7 @@ const TOOL_HINTS = {
   text: "Click a point to place a text label.",
   axes: "Click a point to place an axes-origin marker.",
   section: "Click the drawing plane to place a horizontal section cut.",
-  orbit: "Drag to orbit. Middle mouse or Alt-drag also orbits from any tool.",
+  orbit: "Drag to orbit. Hold Control while orbiting to pan in the view plane. Middle mouse pans; Alt-drag also orbits from any tool.",
   pan: "Drag to pan. Middle mouse also pans from any tool.",
   zoom: "Drag vertically or use the mouse wheel to zoom."
 };
@@ -186,12 +188,16 @@ const colorPattern = /^#[0-9a-f]{6}$/i;
 
 const normalizeAppearance = (raw) => {
   const appearance = raw && typeof raw === "object" ? raw : {};
+  const rawSelectionColor = typeof appearance.selectionColor === "string" ? appearance.selectionColor : "";
+  const selectionColor = rawSelectionColor.toLowerCase() === "#f2bf2f"
+    ? DEFAULT_APPEARANCE.selectionColor
+    : rawSelectionColor;
   return {
     theme: appearance.theme === "dark" ? "dark" : "light",
     canvasColor: colorPattern.test(appearance.canvasColor ?? "") ? appearance.canvasColor : DEFAULT_APPEARANCE.canvasColor,
     gridColor: colorPattern.test(appearance.gridColor ?? "") ? appearance.gridColor : DEFAULT_APPEARANCE.gridColor,
     edgeColor: colorPattern.test(appearance.edgeColor ?? "") ? appearance.edgeColor : DEFAULT_APPEARANCE.edgeColor,
-    selectionColor: colorPattern.test(appearance.selectionColor ?? "") ? appearance.selectionColor : DEFAULT_APPEARANCE.selectionColor,
+    selectionColor: colorPattern.test(selectionColor ?? "") ? selectionColor : DEFAULT_APPEARANCE.selectionColor,
     edgeWidth: Number.isFinite(appearance.edgeWidth) ? Math.max(1, Math.min(4, appearance.edgeWidth)) : DEFAULT_APPEARANCE.edgeWidth
   };
 };
@@ -837,7 +843,7 @@ const selectMeshComponent = (event, hit) => {
   const face = getMeshFaceRegion(app.project, hit.entity, hit.triangleIndex);
   if (face) {
     setComponentSelection({ type: "face", entityId: hit.entity.id, ...face, point: hit.point });
-    setStatus("Face selected. Choose Push/Pull or drag with Push/Pull active.");
+    setStatus("Face selected. Choose Push/Pull, then click to start a live preview.");
   } else {
     setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
   }
@@ -1125,6 +1131,7 @@ const activateSidePanel = (panelId) => {
 };
 
 const setTool = (tool) => {
+  cancelPushPullPreview();
   if (app.interaction?.kind === "rotate-guide") {
     restoreSnapshot(app.interaction.before);
   }
@@ -1812,6 +1819,12 @@ const normalizeProject = (source) => {
       if (entity.metadata.profilePoints !== undefined) {
         entity.metadata.profilePoints = validateNumericArray(entity.metadata.profilePoints, 3, "Profile points");
       }
+      if (entity.metadata.hiddenEdges !== undefined) {
+        if (!Array.isArray(entity.metadata.hiddenEdges) || entity.metadata.hiddenEdges.length > 300000 || !entity.metadata.hiddenEdges.every((edge) => typeof edge === "string" && edge.length <= 256)) {
+          throw new Error("Mesh hidden-edge data is invalid.");
+        }
+        entity.metadata.hiddenEdges = Array.from(entity.metadata.hiddenEdges);
+      }
       if (entity.metadata.sweepVector !== undefined) {
         entity.metadata.sweepVector = validateVector3(entity.metadata.sweepVector, "Sweep vector");
       }
@@ -2125,6 +2138,42 @@ const exportStl = () => {
 };
 
 const deleteSelection = () => {
+  const component = app.componentSelection;
+  if (component) {
+    const entity = getEntity(app.project, component.entityId);
+    if (!entity || entity.locked) {
+      setStatus("Select an unlocked face or edge to delete.", "warning");
+      return;
+    }
+    if (component.type === "face") {
+      const result = mutate("Delete face", () => {
+        const deletion = removeMeshFaces(entity, component.triangleIndices);
+        if (deletion.remaining === 0) {
+          removeEntity(app.project, entity.id);
+        } else {
+          app.renderer.invalidate(entity.id);
+        }
+        return deletion;
+      });
+      if (result) {
+        clearSelection();
+        setStatus(`Deleted ${result.removed === 1 ? "face triangle" : "face"}.`);
+      }
+      return;
+    }
+    if (component.type === "edge") {
+      const changed = mutate("Delete edge", () => {
+        const deleted = hideMeshEdge(app.project, entity, component.start, component.end);
+        app.renderer.invalidate(entity.id);
+        return deleted;
+      });
+      if (changed) {
+        clearSelection();
+        setStatus("Deleted edge.");
+      }
+      return;
+    }
+  }
   const entities = currentSelection().filter((entity) => !entity.locked);
   if (entities.length === 0) {
     setStatus("Select unlocked entities to delete.", "warning");
@@ -2439,6 +2488,163 @@ const applyPushPull = (height) => {
   });
 };
 
+const pushPullHeightForPointer = (interaction, pointer) => (
+  (interaction.startPointer.y - pointer.y) * (app.camera.distance / Math.max(app.renderer.height, 1))
+);
+
+const restorePushPullPreview = (interaction) => {
+  if (interaction.specialCircle) {
+    const liveCamera = app.camera.serialize();
+    restoreSnapshot({ ...interaction.before, camera: liveCamera });
+    return;
+  }
+  const entityIndex = app.project.entities.findIndex((entity) => entity.id === interaction.entityId);
+  if (entityIndex >= 0) {
+    app.project.entities[entityIndex] = structuredClone(interaction.baseEntity);
+  }
+  app.selection = new Set(interaction.before.selection);
+  app.selectionOrder = Array.from(interaction.before.selectionOrder);
+  app.componentSelection = structuredClone(interaction.before.componentSelection);
+  app.renderer.invalidate(interaction.entityId);
+};
+
+const previewCirclePushPull = (circle, component) => {
+  const profile = {
+    points: meshWorldVertices(app.project, circle),
+    normal: component.normal ?? circle.metadata.profileNormal
+  };
+  for (const candidate of app.project.entities) {
+    if (candidate.id === circle.id || candidate.kind !== "mesh" || candidate.metadata?.primitive !== "box" || candidate.locked) {
+      continue;
+    }
+    const hole = cutCircularHoleThroughBox(app.project, candidate, profile);
+    if (!hole) {
+      continue;
+    }
+    removeEntity(app.project, candidate.id);
+    removeEntity(app.project, circle.id);
+    addEntity(app.project, hole);
+    app.selection = new Set([hole.id]);
+    app.selectionOrder = [hole.id];
+    app.componentSelection = null;
+    app.renderer.invalidate();
+    return hole;
+  }
+  throw new Error("This circular face must lie fully on an unlocked axis-aligned Box face to create a through-hole.");
+};
+
+const updatePushPullPreview = (interaction, height) => {
+  restorePushPullPreview(interaction);
+  interaction.height = height;
+  if (Math.abs(height) < 0.0001) {
+    setStatus("Push/Pull: 0 mm. Move the pointer, then click to apply.");
+    requestRender();
+    return;
+  }
+  try {
+    const entity = getEntity(app.project, interaction.entityId);
+    if (!entity) {
+      throw new Error("The selected face is no longer available.");
+    }
+    if (interaction.specialCircle) {
+      previewCirclePushPull(entity, interaction.component);
+    } else if (entity.metadata?.planar) {
+      extrudeProfile(entity, height);
+      app.renderer.invalidate(entity.id);
+      const face = getMeshFaceRegion(app.project, entity, 1);
+      app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
+    } else {
+      moveMeshFace(app.project, entity, interaction.component, height);
+      app.renderer.invalidate(entity.id);
+      const face = getMeshFaceRegion(app.project, entity, interaction.component.triangleIndices[0]);
+      app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
+    }
+    setStatus(`Push/Pull: ${formatLength(height)}. Click to apply or press Escape to cancel.`);
+  } catch (error) {
+    interaction.height = 0;
+    restorePushPullPreview(interaction);
+    setStatus(error.message || "Push/Pull preview could not be created.", "error");
+  }
+  requestRender();
+};
+
+const beginPushPullPreview = (event) => {
+  const hit = pickEntity(event);
+  if (hit?.entity.kind === "mesh" && !hit.coarse && Number.isInteger(hit.triangleIndex)) {
+    const face = getMeshFaceRegion(app.project, hit.entity, hit.triangleIndex);
+    if (face) {
+      setComponentSelection({ type: "face", entityId: hit.entity.id, ...face, point: hit.point });
+    }
+  }
+  let component = app.componentSelection;
+  let entity = component?.type === "face" ? getEntity(app.project, component.entityId) : null;
+  if (!entity) {
+    entity = currentSelection().find((candidate) => candidate.kind === "mesh" && candidate.metadata?.planar && !candidate.locked) ?? null;
+    const face = entity ? getMeshFaceRegion(app.project, entity, 0) : null;
+    if (entity && face) {
+      component = { type: "face", entityId: entity.id, ...face, point: face.point };
+      setComponentSelection(component);
+    }
+  }
+  if (!entity || !component || entity.locked) {
+    setStatus("Click an unlocked planar face before using Push/Pull.", "warning");
+    return;
+  }
+  const before = snapshot();
+  app.interaction = {
+    kind: "pushpull-preview",
+    pointerId: event.pointerId,
+    startPointer: getPointer(event),
+    before,
+    baseEntity: structuredClone(entity),
+    entityId: entity.id,
+    component: structuredClone(component),
+    specialCircle: Boolean(entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal),
+    height: 0
+  };
+  setStatus("Push/Pull preview started. Move the pointer, then click to apply.");
+  requestRender();
+};
+
+const commitPushPullPreview = () => {
+  const interaction = app.interaction;
+  if (interaction?.kind !== "pushpull-preview") {
+    return;
+  }
+  if (Math.abs(interaction.height) < 0.0001) {
+    restorePushPullPreview(interaction);
+    app.interaction = null;
+    updatePanels();
+    setStatus("Push/Pull cancelled.");
+    requestRender();
+    return;
+  }
+  app.interaction = null;
+  const entity = getEntity(app.project, interaction.entityId);
+  if (entity && !interaction.specialCircle) {
+    const triangleIndex = entity.metadata?.primitive === "extrusion" ? 1 : interaction.component.triangleIndices[0];
+    const face = getMeshFaceRegion(app.project, entity, triangleIndex);
+    app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
+  }
+  if (commitSnapshot("Push/Pull face", interaction.before)) {
+    setStatus(`Applied Push/Pull: ${formatLength(interaction.height)}.`);
+  }
+  updatePanels();
+  requestRender();
+};
+
+const cancelPushPullPreview = () => {
+  const interaction = app.interaction;
+  if (interaction?.kind !== "pushpull-preview") {
+    return false;
+  }
+  restorePushPullPreview(interaction);
+  app.interaction = null;
+  updatePanels();
+  requestRender();
+  return true;
+};
+
 const applyCirclePushPull = (circle, height) => {
   const component = app.componentSelection?.entityId === circle.id ? app.componentSelection : null;
   const profile = {
@@ -2585,7 +2791,12 @@ const applyMeasurements = () => {
         app.pending = null;
       }
     } else if (app.activeTool === "pushpull") {
-      applyPushPull(values[0]);
+      if (app.interaction?.kind === "pushpull-preview") {
+        updatePushPullPreview(app.interaction, values[0]);
+        commitPushPullPreview();
+      } else {
+        applyPushPull(values[0]);
+      }
     } else if (app.activeTool === "offset") {
       applyOffset(values[0]);
     } else if (app.activeTool === "followme") {
@@ -2876,6 +3087,7 @@ const pointerMovement = (current, start) => Math.hypot(current.x - start.x, curr
 const handlePointerDown = (event) => {
   elements.canvas.focus({ preventScroll: true });
   if (event.button === 2 || event.altKey) {
+    cancelPushPullPreview();
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
       app.interaction = null;
@@ -2887,7 +3099,12 @@ const handlePointerDown = (event) => {
     setViewportCursor("grabbing");
     return;
   }
+  if (event.button === 0 && app.activeTool === "pushpull" && app.interaction?.kind === "pushpull-preview") {
+    commitPushPullPreview();
+    return;
+  }
   if (event.button === 1) {
+    cancelPushPullPreview();
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
       app.interaction = null;
@@ -2964,6 +3181,10 @@ const handlePointerDown = (event) => {
     return;
   }
   if (tool === "pushpull" || tool === "offset" || tool === "followme") {
+    if (tool === "pushpull") {
+      beginPushPullPreview(event);
+      return;
+    }
     const component = app.componentSelection;
     const componentEntity = component?.type === "face" ? getEntity(app.project, component.entityId) : null;
     const required = componentEntity ?? currentSelection().find((entity) => entity.kind === "mesh" && entity.metadata?.planar && !entity.locked);
@@ -2972,8 +3193,8 @@ const handlePointerDown = (event) => {
       if (hit?.entity.kind === "mesh") {
         selectMeshComponent(event, hit);
       }
-      if (tool !== "pushpull" || !app.componentSelection) {
-        setStatus(`${tool === "pushpull" ? "Push/Pull" : tool === "offset" ? "Offset" : "Follow Me"} requires a selected face.`, "warning");
+      if (!app.componentSelection) {
+        setStatus(`${tool === "offset" ? "Offset" : "Follow Me"} requires a selected face.`, "warning");
         return;
       }
     }
@@ -3070,7 +3291,13 @@ const handlePointerMove = (event) => {
     return;
   }
   if (interaction.kind === "orbit") {
-    app.camera.orbit(pointer.x - interaction.lastPointer.x, pointer.y - interaction.lastPointer.y);
+    const deltaX = pointer.x - interaction.lastPointer.x;
+    const deltaY = pointer.y - interaction.lastPointer.y;
+    if (event.ctrlKey) {
+      app.camera.pan(deltaX, deltaY, app.renderer.height);
+    } else {
+      app.camera.orbit(deltaX, deltaY);
+    }
     interaction.lastPointer = pointer;
     requestRender();
     return;
@@ -3145,9 +3372,8 @@ const handlePointerMove = (event) => {
     requestRender();
     return;
   }
-  if (interaction.kind === "pushpull") {
-    const height = (interaction.startPointer.y - pointer.y) * (app.camera.distance / Math.max(app.renderer.height, 1));
-    setStatus(`Push/Pull: ${formatLength(height)}. Release to apply or type an exact height.`);
+  if (interaction.kind === "pushpull-preview") {
+    updatePushPullPreview(interaction, pushPullHeightForPointer(interaction, pointer));
     return;
   }
   if (interaction.kind === "offset") {
@@ -3171,6 +3397,10 @@ const handlePointerUp = (event) => {
   }
   if (elements.canvas.hasPointerCapture(event.pointerId)) {
     elements.canvas.releasePointerCapture(event.pointerId);
+  }
+  if (interaction.kind === "pushpull-preview") {
+    setViewportCursor();
+    return;
   }
   if (interaction.kind !== "rotate-guide") {
     app.interaction = null;
@@ -3217,19 +3447,6 @@ const handlePointerUp = (event) => {
     return;
   }
   const pointer = getPointer(event);
-  if (interaction.kind === "pushpull") {
-    const component = app.componentSelection;
-    const componentFace = component?.type === "face" && component.entityId === interaction.faceId ? component : null;
-    const height = (interaction.startPointer.y - pointer.y) * (app.camera.distance / Math.max(app.renderer.height, 1));
-    if (Math.abs(height) >= 0.1) {
-      try {
-        applyPushPull(height);
-      } catch (error) {
-        setStatus(error.message, "error");
-      }
-    }
-    return;
-  }
   if (interaction.kind === "offset") {
     const distance = (pointer.x - interaction.startPointer.x) * (app.camera.distance / Math.max(app.renderer.height, 1));
     if (Math.abs(distance) >= 0.1) {
@@ -3257,6 +3474,11 @@ const handlePointerUp = (event) => {
 };
 
 const cancelActiveOperation = () => {
+  if (cancelPushPullPreview()) {
+    setTool("select");
+    setStatus("Operation cancelled.");
+    return;
+  }
   if (app.interaction?.before && ["move", "rotate", "scale", "direct-move", "rotate-guide"].includes(app.interaction.kind)) {
     restoreSnapshot(app.interaction.before);
   }
