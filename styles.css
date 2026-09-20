@@ -77,6 +77,8 @@ body.theme-dark .modal-actions button { border-color: #476473; background: #1b33
 body.theme-dark .ribbon-utility-button { border-color: #3d5a66; background: #19303f; color: #cfe1e5; }
 body.theme-dark .floating-palette { border-color: #42616c; background: #162936; box-shadow: 0 16px 42px rgb(0 0 0 / 38%); }
 body.theme-dark .floating-palette-title { border-color: #365060; background: #203947; color: #d8eaed; }
+body.theme-dark .floating-palette-group { border-color: #365060; }
+body.theme-dark .floating-palette-group-title { color: #9bb7c1; }
 body.theme-dark .floating-palette-close { color: #b7ccd2; }
 body.theme-dark .floating-palette-close:hover { background: #294955; color: #89f5dc; }
 
@@ -258,9 +260,12 @@ button {
 .floating-palette {
   position: fixed;
   z-index: 20;
-  width: 306px;
+  width: 336px;
+  min-width: 238px;
+  min-height: 175px;
   max-height: calc(100vh - 20px);
-  overflow: hidden auto;
+  overflow: hidden;
+  resize: both;
   border: 1px solid #9db3b9;
   border-radius: 8px;
   background: #ffffff;
@@ -307,16 +312,42 @@ button {
 }
 
 .floating-palette-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  max-height: min(68vh, calc(100vh - 65px), 430px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
+  gap: 0;
+  max-height: calc(100vh - 57px);
   overflow: auto;
-  padding: 8px;
+  padding: 4px 8px 10px;
 }
 
-.floating-palette-tools .tool-button {
-  flex: 0 0 54px;
+.floating-palette-group {
+  min-width: 0;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid #d4e0e3;
+}
+
+.floating-palette-group:last-child {
+  border-bottom: 0;
+}
+
+.floating-palette-group-title {
+  margin: 0 4px 7px;
+  color: #58717a;
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.floating-palette-group-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  gap: 3px;
+}
+
+.floating-palette-group-tools .tool-button {
+  min-width: 0;
+  width: 100%;
 }
 
 .ribbon-divider {

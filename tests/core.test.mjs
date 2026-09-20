@@ -13,19 +13,19 @@ import {
   createEmptyProject,
   createRectangleEntity,
   createSweepGeometry,
-  edgeIndicesForMesh,
   entityBounds,
   extrudeProfile,
   getEntity,
   getMeshFaceRegion,
-  hideMeshEdge,
   explodeGroup,
   makeGroup,
   moveMeshFace,
   meshReport,
   meshWorldVertices,
+  nestedProfileHoles,
   projectBounds,
   reverseMeshFaces,
+  removeMeshEdgeFaces,
   removeMeshFaces,
   rotateEntityAroundAxis
 } from "../geometry.js";
@@ -141,6 +141,46 @@ test("profile drawings can be created on a vertical object face", () => {
   assert.equal(rectangle.vertices.length / 3, 8);
 });
 
+test("nested coplanar circles become watertight Push/Pull holes", () => {
+  const project = createEmptyProject();
+  const rectangle = addEntity(project, createRectangleEntity([-50, -50, 0], [50, 50, 0]));
+  const firstCircle = addEntity(project, createCircleEntity([-20, 0, 0], 10, 12));
+  const secondCircle = addEntity(project, createCircleEntity([20, 0, 0], 12, 16));
+  const holes = nestedProfileHoles(project, rectangle);
+  assert.deepEqual(new Set(holes.map((hole) => hole.entityId)), new Set([firstCircle.id, secondCircle.id]));
+  extrudeProfile(rectangle, 25, holes.map((hole) => hole.points));
+  const report = meshReport(project, [rectangle]);
+  assert.equal(rectangle.metadata.holeCount, 2);
+  assert.equal(report.degenerateCount, 0);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+});
+
+test("nested profiles make watertight holes on vertical negative Push/Pull", () => {
+  const project = createEmptyProject();
+  const rectangle = addEntity(project, createRectangleEntity([0, -50, 0], [0, 50, 100], [1, 0, 0]));
+  addEntity(project, createCircleEntity([0, 0, 50], 20, 18, "Circle", [1, 0, 0]));
+  const holes = nestedProfileHoles(project, rectangle);
+  assert.equal(holes.length, 1);
+  extrudeProfile(rectangle, -30, holes.map((hole) => hole.points));
+  const report = meshReport(project, [rectangle]);
+  assert.equal(report.degenerateCount, 0);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+  assert.deepEqual(entityBounds(project, rectangle).min, [-30, -50, 0]);
+});
+
+test("profiles outside the outer face or on another plane do not make holes", () => {
+  const project = createEmptyProject();
+  const rectangle = addEntity(project, createRectangleEntity([0, 0, 0], [100, 100, 0]));
+  const nested = addEntity(project, createCircleEntity([50, 50, 0], 15, 12));
+  addEntity(project, createCircleEntity([150, 50, 0], 10, 12));
+  addEntity(project, createCircleEntity([25, 25, 1], 5, 12));
+  const holes = nestedProfileHoles(project, rectangle);
+  assert.equal(holes.length, 1);
+  assert.equal(holes[0].entityId, nested.id);
+});
+
 test("circle profiles honour their supplied surface normal", () => {
   const circle = createCircleEntity([10, 0, 0], 5, 8, "Face circle", [1, 0, 0]);
   assert.ok(circle.vertices.every((value, index) => index % 3 !== 0 || value === 10));
@@ -231,16 +271,16 @@ test("deleting a selected mesh face preserves the remaining faces", () => {
   assert.equal(box.metadata.solid, false);
 });
 
-test("deleting a selected mesh edge hides only that edge", () => {
+test("deleting a selected mesh edge removes every face incident to it", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(20, 20, 20));
-  const originalEdges = edgeIndicesForMesh(box.vertices, box.indices);
   const start = [-10, -10, 0];
   const end = [10, -10, 0];
-  assert.equal(hideMeshEdge(project, box, start, end), true);
-  const visibleEdges = edgeIndicesForMesh(box.vertices, box.indices, box.metadata.hiddenEdges);
-  assert.equal(visibleEdges.length, originalEdges.length - 2);
-  assert.equal(box.indices.length / 3, 12);
+  const result = removeMeshEdgeFaces(project, box, start, end);
+  assert.equal(result.removed, 4);
+  assert.equal(result.remaining, 8);
+  assert.equal(box.indices.length / 3, 8);
+  assert.equal(box.metadata.solid, false);
 });
 
 test("zoom becomes less sensitive near the model", () => {

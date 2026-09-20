@@ -126,6 +126,14 @@ try {
   if (await page.locator("#floating-palette").isHidden()) {
     throw new Error("Detaching the ribbon did not open the floating palette.");
   }
+  const paletteGroups = await page.locator("#floating-palette .floating-palette-group-title").allTextContents();
+  if (!["Home", "File", "Edit", "View", "Camera", "Draw", "Tools", "Solid", "Window", "Appearance"].every((label) => paletteGroups.includes(label))) {
+    throw new Error(`Floating palette is missing ribbon group titles: ${paletteGroups.join(", ")}`);
+  }
+  const paletteResize = await page.locator("#floating-palette").evaluate((palette) => getComputedStyle(palette).resize);
+  if (paletteResize !== "both") {
+    throw new Error(`Floating palette is not resizable: ${paletteResize}`);
+  }
   await page.locator("#attach-ribbon-button").click();
   if (!await page.locator("#floating-palette").isHidden()) {
     throw new Error("Attaching the ribbon did not close the floating palette.");
@@ -191,6 +199,17 @@ try {
     throw new Error("Redo changed the active camera.");
   }
   await page.getByTitle("Iso view").click();
+  await page.getByText("Entity", { exact: true }).click();
+  await page.locator("#entity-info input[type='checkbox']").nth(1).check();
+  const lockedEntityStatus = await page.locator("#entity-info").textContent();
+  if (!lockedEntityStatus?.includes("Unlock object")) {
+    throw new Error("A selected locked object does not expose the Unlock action.");
+  }
+  await page.getByRole("button", { name: "Unlock object", exact: true }).click();
+  const unlockedCheckbox = await page.locator("#entity-info input[type='checkbox']").nth(1).isChecked();
+  if (unlockedCheckbox) {
+    throw new Error("Unlock object did not clear the locked state.");
+  }
   await page.getByRole("button", { name: "Tools", exact: true }).click();
   await page.getByTitle("Select (Space)").click();
   const canvas = page.locator("#viewport");

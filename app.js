@@ -14,7 +14,6 @@ import {
   cutCircularHoleThroughBox,
   edgeIndicesForMesh,
   getMeshFaceRegion,
-  hideMeshEdge,
   createCylinderEntity,
   createDemoProject,
   createEdgeEntity,
@@ -32,11 +31,13 @@ import {
   moveMeshFace,
   meshReport,
   meshWorldVertices,
+  nestedProfileHoles,
   newId,
   offsetProfile,
   planeBasis,
   projectBounds,
   removeEntity,
+  removeMeshEdgeFaces,
   removeMeshFaces,
   reverseMeshFaces,
   rotateEntityAroundAxis,
@@ -101,9 +102,9 @@ const TOOL_HINTS = {
   eraser: "Click an entity to erase it.",
   paint: "Choose a material in the Materials tray, then click a mesh to paint it.",
   move: "Select entities, then drag on the ground plane. Measurements accepts X, Y, Z translation.",
-  rotate: "Select an object, then click a face or edge to place a protractor. Move the pointer to set its rotation angle; click to apply.",
+  rotate: "Click the exact face or edge point to use as the pivot, then set a reference point. Move the pointer to preview the rotation; click to apply.",
   scale: "Select entities, then drag left or right to scale uniformly. Measurements accepts one factor or X, Y, Z.",
-  pushpull: "Click a planar face, move to preview the extrusion, then click again to apply. Measurements accepts an exact height.",
+  pushpull: "Click a planar face, move in the face-normal direction to preview the extrusion, then click again to apply. Nested profiles become holes. Measurements accepts an exact height.",
   offset: "Select a planar face, then drag or enter an exact offset distance in Measurements.",
   followme: "Select a planar face, then drag a path or enter an X, Y, Z sweep vector in Measurements.",
   tape: "Click two points to create a tape-measure annotation in millimetres.",
@@ -757,7 +758,7 @@ const pickEntity = (event) => {
   }
   let closest = null;
   for (const entity of allRenderableEntities(app.project)) {
-    if (entity.kind !== "mesh" || entity.locked) {
+    if (entity.kind !== "mesh") {
       continue;
     }
     const bounds = entityBounds(app.project, entity);
@@ -813,7 +814,13 @@ const pickMeshEdge = (event, meshHit) => {
     }
     const distance = pointSegmentDistance([pointer.x, pointer.y], start, end);
     if (distance <= threshold && (!closest || distance < closest.distance)) {
-      closest = { entity: meshHit.entity, start: start3, end: end3, distance };
+      closest = {
+        entity: meshHit.entity,
+        start: start3,
+        end: end3,
+        point: nearestPointOnSegment(meshHit.point ?? start3, start3, end3).point,
+        distance
+      };
     }
   }
   return closest;
@@ -1036,7 +1043,8 @@ const selectRibbon = (name) => {
 
 const positionFloatingPalette = () => {
   const margin = 10;
-  const maximumX = Math.max(margin, window.innerWidth - 326);
+  const paletteWidth = elements.floatingPalette.offsetWidth || 326;
+  const maximumX = Math.max(margin, window.innerWidth - paletteWidth - margin);
   const paletteHeight = elements.floatingPalette.offsetHeight || Math.min(467, window.innerHeight - margin * 2);
   const maximumY = Math.max(margin, window.innerHeight - paletteHeight - margin);
   app.paletteOffset.x = Math.min(Math.max(margin, app.paletteOffset.x), maximumX);
@@ -1047,23 +1055,27 @@ const positionFloatingPalette = () => {
 
 const populateFloatingPalette = () => {
   const fragment = document.createDocumentFragment();
-  const seen = new Set();
-  for (const source of elements.ribbon.querySelectorAll(".tool-button")) {
-    const key = source.dataset.tool ? `tool:${source.dataset.tool}` : `action:${source.dataset.action}`;
-    if (!key || seen.has(key)) {
-      continue;
+  const labels = new Map(Array.from(document.querySelectorAll(".menu-button")).map((button) => [button.dataset.menu, button.textContent.trim()]));
+  for (const sourceGroup of elements.ribbon.querySelectorAll(".ribbon-group")) {
+    const group = element("section", { className: "floating-palette-group" });
+    group.append(element("h2", { className: "floating-palette-group-title", text: labels.get(sourceGroup.dataset.ribbon) ?? "Tools" }));
+    const tools = element("div", { className: "floating-palette-group-tools" });
+    for (const source of sourceGroup.querySelectorAll(".tool-button")) {
+      const button = source.cloneNode(true);
+      button.removeAttribute("id");
+      button.addEventListener("click", () => {
+        if (button.dataset.tool) {
+          setTool(button.dataset.tool);
+        } else if (button.dataset.action) {
+          executeAction(button.dataset.action);
+        }
+      });
+      tools.append(button);
     }
-    seen.add(key);
-    const button = source.cloneNode(true);
-    button.removeAttribute("id");
-    button.addEventListener("click", () => {
-      if (button.dataset.tool) {
-        setTool(button.dataset.tool);
-      } else if (button.dataset.action) {
-        executeAction(button.dataset.action);
-      }
-    });
-    fragment.append(button);
+    if (tools.childElementCount > 0) {
+      group.append(tools);
+      fragment.append(group);
+    }
   }
   elements.floatingPaletteTools.replaceChildren(fragment);
 };
@@ -1154,7 +1166,7 @@ const inputValue = (input, fallback = 0) => {
 const addInfoField = (container, labelText, value, onChange, options = {}) => {
   const row = element("div", { className: "info-row" });
   const label = element("label", { text: labelText });
-  const input = element("input", { type: options.type ?? "text", value: String(value), step: options.step });
+  const input = element("input", { type: options.type ?? "text", value: String(value), step: options.step, disabled: options.disabled });
   if (options.type === "checkbox") {
     input.checked = Boolean(value);
   }
@@ -1164,10 +1176,10 @@ const addInfoField = (container, labelText, value, onChange, options = {}) => {
   return input;
 };
 
-const addInfoSelect = (container, labelText, current, entries, onChange) => {
+const addInfoSelect = (container, labelText, current, entries, onChange, options = {}) => {
   const row = element("div", { className: "info-row" });
   const label = element("label", { text: labelText });
-  const select = element("select");
+  const select = element("select", { disabled: options.disabled });
   for (const entry of entries) {
     const option = element("option", { text: entry.name, value: entry.id });
     option.selected = entry.id === current;
@@ -1196,6 +1208,7 @@ const updateEntityPanel = () => {
   }
 
   const entity = entities[0];
+  const locked = entity.locked;
   const information = element("div", { className: "info-list" });
   if (app.componentSelection?.entityId === entity.id) {
     const component = element("div", { className: "info-row" });
@@ -1205,39 +1218,49 @@ const updateEntityPanel = () => {
   }
   addInfoField(information, "Name", entity.name, (value) => mutate("Rename entity", () => {
     entity.name = String(value).trim() || entity.name;
-  }));
+  }), { disabled: locked });
   const kind = element("div", { className: "info-row" });
   append(kind, element("label", { text: "Type" }), element("span", { text: entity.kind }));
   information.append(kind);
   addInfoField(information, "Position X", formatNumber(entity.transform.position[0]), (value) => mutate("Move entity", () => {
     entity.transform.position[0] = inputValue({ value }, entity.transform.position[0]);
-  }), { type: "number", step: "0.1" });
+  }), { type: "number", step: "0.1", disabled: locked });
   addInfoField(information, "Position Y", formatNumber(entity.transform.position[1]), (value) => mutate("Move entity", () => {
     entity.transform.position[1] = inputValue({ value }, entity.transform.position[1]);
-  }), { type: "number", step: "0.1" });
+  }), { type: "number", step: "0.1", disabled: locked });
   addInfoField(information, "Position Z", formatNumber(entity.transform.position[2]), (value) => mutate("Move entity", () => {
     entity.transform.position[2] = inputValue({ value }, entity.transform.position[2]);
-  }), { type: "number", step: "0.1" });
+  }), { type: "number", step: "0.1", disabled: locked });
   addInfoField(information, "Rotate Z", formatNumber((entity.transform.rotation[2] * 180) / Math.PI), (value) => mutate("Rotate entity", () => {
     entity.transform.rotation[2] = (inputValue({ value }) * Math.PI) / 180;
-  }), { type: "number", step: "1" });
+  }), { type: "number", step: "1", disabled: locked });
   addInfoField(information, "Scale", formatNumber(entity.transform.scale[0]), (value) => mutate("Scale entity", () => {
     const scale = Math.max(0.0001, inputValue({ value }, 1));
     entity.transform.scale = [scale, scale, scale];
-  }), { type: "number", step: "0.01" });
+  }), { type: "number", step: "0.01", disabled: locked });
   addInfoField(information, "Visible", entity.visible, (value) => mutate("Set visibility", () => {
     entity.visible = value;
-  }), { type: "checkbox" });
+  }), { type: "checkbox", disabled: locked });
   addInfoField(information, "Locked", entity.locked, (value) => mutate("Set lock", () => {
     entity.locked = value;
   }), { type: "checkbox" });
+  if (entity.locked) {
+    const unlock = element("button", { className: "small-button", text: "Unlock object", type: "button", title: "Unlock the selected object" });
+    unlock.addEventListener("click", () => {
+      mutate("Unlock object", () => {
+        entity.locked = false;
+      });
+      setStatus(`Unlocked ${entity.name}.`);
+    });
+    information.append(unlock);
+  }
   addInfoSelect(information, "Tag", entity.tagId, app.project.tags, (value) => mutate("Assign tag", () => {
     entity.tagId = value;
-  }));
+  }), { disabled: locked });
   if (entity.kind !== "group" && entity.kind !== "section") {
     addInfoSelect(information, "Material", entity.materialId, app.project.materials, (value) => mutate("Assign material", () => {
       entity.materialId = value;
-    }));
+    }), { disabled: locked });
   }
   const bounds = entityBounds(app.project, entity);
   if (bounds) {
@@ -1819,12 +1842,6 @@ const normalizeProject = (source) => {
       if (entity.metadata.profilePoints !== undefined) {
         entity.metadata.profilePoints = validateNumericArray(entity.metadata.profilePoints, 3, "Profile points");
       }
-      if (entity.metadata.hiddenEdges !== undefined) {
-        if (!Array.isArray(entity.metadata.hiddenEdges) || entity.metadata.hiddenEdges.length > 300000 || !entity.metadata.hiddenEdges.every((edge) => typeof edge === "string" && edge.length <= 256)) {
-          throw new Error("Mesh hidden-edge data is invalid.");
-        }
-        entity.metadata.hiddenEdges = Array.from(entity.metadata.hiddenEdges);
-      }
       if (entity.metadata.sweepVector !== undefined) {
         entity.metadata.sweepVector = validateVector3(entity.metadata.sweepVector, "Sweep vector");
       }
@@ -2162,14 +2179,18 @@ const deleteSelection = () => {
       return;
     }
     if (component.type === "edge") {
-      const changed = mutate("Delete edge", () => {
-        const deleted = hideMeshEdge(app.project, entity, component.start, component.end);
-        app.renderer.invalidate(entity.id);
-        return deleted;
+      const result = mutate("Delete edge and faces", () => {
+        const deletion = removeMeshEdgeFaces(app.project, entity, component.start, component.end);
+        if (deletion.remaining === 0) {
+          removeEntity(app.project, entity.id);
+        } else {
+          app.renderer.invalidate(entity.id);
+        }
+        return deletion;
       });
-      if (changed) {
+      if (result?.removed > 0) {
         clearSelection();
-        setStatus("Deleted edge.");
+        setStatus(`Deleted edge and ${result.removed === 1 ? "one face triangle" : `${result.removed} face triangles`}.`);
       }
       return;
     }
@@ -2469,7 +2490,11 @@ const applyPushPull = (height) => {
     }
     if (entity.metadata?.planar) {
       return mutate("Push/Pull profile", () => {
-        extrudeProfile(entity, height);
+        const holes = nestedProfileHoles(app.project, entity);
+        extrudeProfile(entity, height, holes.map((hole) => hole.points));
+        for (const hole of holes) {
+          removeEntity(app.project, hole.entityId);
+        }
         app.renderer.invalidate(entity.id);
       });
     }
@@ -2483,29 +2508,48 @@ const applyPushPull = (height) => {
     throw new Error("Select an unlocked planar face before using Push/Pull.");
   }
   return mutate("Push/Pull", () => {
-    extrudeProfile(face, height);
+    const holes = nestedProfileHoles(app.project, face);
+    extrudeProfile(face, height, holes.map((hole) => hole.points));
+    for (const hole of holes) {
+      removeEntity(app.project, hole.entityId);
+    }
     app.renderer.invalidate(face.id);
   });
 };
 
-const pushPullHeightForPointer = (interaction, pointer) => (
-  (interaction.startPointer.y - pointer.y) * (app.camera.distance / Math.max(app.renderer.height, 1))
-);
+const pushPullHeightForPointer = (interaction, pointer) => {
+  const viewportHeight = Math.max(app.renderer.height, 1);
+  const matrices = app.camera.getMatrices(app.renderer.width / viewportHeight);
+  const origin = projectPoint(interaction.component.point, app.renderer.width, viewportHeight, matrices.projection, matrices.view);
+  const probeDistance = Math.max(10, app.camera.distance * 0.2);
+  const normalPoint = projectPoint(
+    add3(interaction.component.point, scale3(interaction.component.normal, probeDistance)),
+    app.renderer.width,
+    viewportHeight,
+    matrices.projection,
+    matrices.view
+  );
+  if (origin && normalPoint) {
+    const normalX = normalPoint[0] - origin[0];
+    const normalY = normalPoint[1] - origin[1];
+    const normalLength = Math.hypot(normalX, normalY);
+    if (normalLength > 0.5) {
+      const pointerX = pointer.x - interaction.startPointer.x;
+      const pointerY = pointer.y - interaction.startPointer.y;
+      return ((pointerX * normalX + pointerY * normalY) / normalLength) * (app.camera.distance / viewportHeight);
+    }
+  }
+  return (interaction.startPointer.y - pointer.y) * (app.camera.distance / viewportHeight);
+};
 
 const restorePushPullPreview = (interaction) => {
-  if (interaction.specialCircle) {
-    const liveCamera = app.camera.serialize();
-    restoreSnapshot({ ...interaction.before, camera: liveCamera });
-    return;
-  }
-  const entityIndex = app.project.entities.findIndex((entity) => entity.id === interaction.entityId);
-  if (entityIndex >= 0) {
-    app.project.entities[entityIndex] = structuredClone(interaction.baseEntity);
-  }
+  const liveCamera = app.camera.serialize();
+  app.project = structuredClone(interaction.before.project);
+  app.camera.restore(liveCamera);
   app.selection = new Set(interaction.before.selection);
   app.selectionOrder = Array.from(interaction.before.selectionOrder);
   app.componentSelection = structuredClone(interaction.before.componentSelection);
-  app.renderer.invalidate(interaction.entityId);
+  app.renderer.invalidate();
 };
 
 const previewCirclePushPull = (circle, component) => {
@@ -2549,7 +2593,11 @@ const updatePushPullPreview = (interaction, height) => {
     if (interaction.specialCircle) {
       previewCirclePushPull(entity, interaction.component);
     } else if (entity.metadata?.planar) {
-      extrudeProfile(entity, height);
+      const holes = nestedProfileHoles(app.project, entity);
+      extrudeProfile(entity, height, holes.map((hole) => hole.points));
+      for (const hole of holes) {
+        removeEntity(app.project, hole.entityId);
+      }
       app.renderer.invalidate(entity.id);
       const face = getMeshFaceRegion(app.project, entity, 1);
       app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
@@ -2995,7 +3043,8 @@ const beginTransform = (kind, event) => {
 
 const beginDirectMove = (event, hit) => {
   if (hit.entity.locked) {
-    setStatus("That entity is locked.", "warning");
+    selectMeshComponent(event, hit);
+    setStatus(`${hit.entity.name} is locked. Use Unlock object in Entity Info to edit it.`, "warning");
     return false;
   }
   if (!app.selection.has(hit.entity.id)) {
@@ -3025,13 +3074,9 @@ const beginDirectMove = (event, hit) => {
 };
 
 const startRotateProtractor = (event) => {
-  let entity = currentSelection().find((candidate) => candidate.kind === "mesh" && !candidate.locked);
   const hit = pickEntity(event);
-  if (!entity && hit?.entity.kind === "mesh" && !hit.entity.locked) {
-    entity = hit.entity;
-    setSelection([entity.id], event.shiftKey ? "add" : "replace");
-  }
-  if (!entity) {
+  const entity = hit?.entity.kind === "mesh" ? hit.entity : currentSelection().find((candidate) => candidate.kind === "mesh" && !candidate.locked);
+  if (!entity || entity.locked) {
     setStatus("Select an unlocked mesh before placing a rotate protractor.", "warning");
     return false;
   }
@@ -3039,8 +3084,12 @@ const startRotateProtractor = (event) => {
     setStatus("Click a model face or edge to place the rotate protractor centre.", "warning");
     return false;
   }
+  const meshEdge = pickMeshEdge(event, hit);
   const axis = normalize3(hit.normal ?? [0, 0, 1]);
-  const pivot = Array.from(hit.point);
+  const pivot = Array.from(meshEdge?.point ?? hit.point);
+  if (!app.selection.has(entity.id)) {
+    setSelection([entity.id], event.shiftKey ? "add" : "replace");
+  }
   app.pending = {
     tool: "rotate",
     entityId: entity.id,

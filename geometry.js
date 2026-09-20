@@ -393,6 +393,390 @@ const triangulateProfile = (points, suppliedNormal = null) => {
   return indices;
 };
 
+const profilePlaneCoordinates = (points, normal) => {
+  const { tangent, bitangent } = planeBasis(normal);
+  const coordinates = [];
+  for (let index = 0; index < points.length; index += 3) {
+    const point = [points[index], points[index + 1], points[index + 2]];
+    coordinates.push([dot3(point, tangent), dot3(point, bitangent)]);
+  }
+  return coordinates;
+};
+
+const ringVertex = (points, index) => [points[index * 3], points[index * 3 + 1], points[index * 3 + 2]];
+
+const appendOrientedTriangle = (indices, vertices, first, second, third, normal) => {
+  const a = ringVertex(vertices, first);
+  const b = ringVertex(vertices, second);
+  const c = ringVertex(vertices, third);
+  const winding = dot3(cross3(subtract3(b, a), subtract3(c, a)), normal);
+  if (winding >= 0) {
+    indices.push(first, second, third);
+  } else {
+    indices.push(first, third, second);
+  }
+};
+
+const earNode = (index, x, y) => ({ index, x, y, prev: null, next: null, steiner: false });
+
+const insertEarNode = (index, x, y, last) => {
+  const node = earNode(index, x, y);
+  if (!last) {
+    node.prev = node;
+    node.next = node;
+  } else {
+    node.next = last.next;
+    node.prev = last;
+    last.next.prev = node;
+    last.next = node;
+  }
+  return node;
+};
+
+const removeEarNode = (node) => {
+  node.next.prev = node.prev;
+  node.prev.next = node.next;
+};
+
+const earArea = (first, second, third) => (
+  (second.y - first.y) * (third.x - second.x) - (second.x - first.x) * (third.y - second.y)
+);
+
+const earEquals = (first, second) => first.x === second.x && first.y === second.y;
+
+const earLinkedList = (data, start, end, clockwise) => {
+  let last = null;
+  if (clockwise === (earSignedArea(data, start, end) > 0)) {
+    for (let index = start; index < end; index += 1) {
+      last = insertEarNode(index, data[index][0], data[index][1], last);
+    }
+  } else {
+    for (let index = end - 1; index >= start; index -= 1) {
+      last = insertEarNode(index, data[index][0], data[index][1], last);
+    }
+  }
+  if (last && earEquals(last, last.next)) {
+    removeEarNode(last);
+    last = last.next;
+  }
+  return last;
+};
+
+const earSignedArea = (data, start, end) => {
+  let area = 0;
+  for (let index = start, previous = end - 1; index < end; previous = index, index += 1) {
+    area += (data[previous][0] - data[index][0]) * (data[index][1] + data[previous][1]);
+  }
+  return area;
+};
+
+const filterEarPoints = (start, end = null) => {
+  if (!start) {
+    return start;
+  }
+  let point = start;
+  let boundary = end ?? start;
+  let changed = false;
+  do {
+    changed = false;
+    if (!point.steiner && (earEquals(point, point.next) || Math.abs(earArea(point.prev, point, point.next)) < PROFILE_INDEX_EPSILON)) {
+      removeEarNode(point);
+      point = boundary = point.prev;
+      if (point === point.next) {
+        break;
+      }
+      changed = true;
+    } else {
+      point = point.next;
+    }
+  } while (changed || point !== boundary);
+  return boundary;
+};
+
+const pointInEarTriangle = (ax, ay, bx, by, cx, cy, px, py) => (
+  (cx - px) * (ay - py) >= (ax - px) * (cy - py) &&
+  (ax - px) * (by - py) >= (bx - px) * (ay - py) &&
+  (bx - px) * (cy - py) >= (cx - px) * (by - py)
+);
+
+const isEar = (ear) => {
+  const previous = ear.prev;
+  const next = ear.next;
+  if (earArea(previous, ear, next) >= -PROFILE_INDEX_EPSILON) {
+    return false;
+  }
+  let point = ear.next.next;
+  while (point !== ear.prev) {
+    if (
+      pointInEarTriangle(previous.x, previous.y, ear.x, ear.y, next.x, next.y, point.x, point.y) &&
+      earArea(point.prev, point, point.next) >= -PROFILE_INDEX_EPSILON
+    ) {
+      return false;
+    }
+    point = point.next;
+  }
+  return true;
+};
+
+const earLocallyInside = (first, second) => (
+  earArea(first.prev, first, first.next) < 0
+    ? earArea(first, second, first.next) >= 0 && earArea(first, first.prev, second) >= 0
+    : earArea(first, second, first.prev) < 0 || earArea(first, first.next, second) < 0
+);
+
+const earSectorContainsSector = (first, second) => (
+  earArea(first.prev, first, second.prev) < 0 && earArea(second.next, first, first.next) < 0
+);
+
+const splitEarPolygon = (first, second) => {
+  const firstCopy = earNode(first.index, first.x, first.y);
+  const secondCopy = earNode(second.index, second.x, second.y);
+  const firstNext = first.next;
+  const secondPrevious = second.prev;
+  first.next = second;
+  second.prev = first;
+  firstCopy.next = firstNext;
+  firstNext.prev = firstCopy;
+  secondCopy.next = firstCopy;
+  firstCopy.prev = secondCopy;
+  secondPrevious.next = secondCopy;
+  secondCopy.prev = secondPrevious;
+  return secondCopy;
+};
+
+const earLeftmost = (start) => {
+  let point = start;
+  let leftmost = start;
+  do {
+    if (point.x < leftmost.x || (point.x === leftmost.x && point.y < leftmost.y)) {
+      leftmost = point;
+    }
+    point = point.next;
+  } while (point !== start);
+  return leftmost;
+};
+
+const findEarHoleBridge = (hole, outer) => {
+  const holeX = hole.x;
+  const holeY = hole.y;
+  let point = outer;
+  let bridgeX = -Infinity;
+  let bridge = null;
+  do {
+    if (holeY <= point.y && holeY >= point.next.y && point.next.y !== point.y) {
+      const deltaY = point.next.y - point.y;
+      const x = point.x + ((holeY - point.y) * (point.next.x - point.x)) / deltaY;
+      if (x <= holeX && x > bridgeX) {
+        bridgeX = x;
+        bridge = point.x < point.next.x ? point : point.next;
+        if (Math.abs(x - holeX) < PROFILE_INDEX_EPSILON) {
+          return bridge;
+        }
+      }
+    }
+    point = point.next;
+  } while (point !== outer);
+  if (!bridge) {
+    return null;
+  }
+  const stop = bridge;
+  const bridgeXPosition = bridge.x;
+  const bridgeYPosition = bridge.y;
+  let minimumTangent = Infinity;
+  point = bridge;
+  do {
+    const inTriangle = pointInEarTriangle(
+      holeY < bridgeYPosition ? holeX : bridgeX,
+      holeY,
+      bridgeXPosition,
+      bridgeYPosition,
+      bridgeX,
+      holeY,
+      point.x,
+      point.y
+    );
+    if (holeX >= point.x && point.x >= bridgeXPosition && Math.abs(holeX - point.x) > PROFILE_INDEX_EPSILON && inTriangle) {
+      const tangent = Math.abs(holeY - point.y) / (holeX - point.x);
+      if (earLocallyInside(point, hole) && (
+        tangent < minimumTangent ||
+        (Math.abs(tangent - minimumTangent) < PROFILE_INDEX_EPSILON && (point.x > bridge.x || (Math.abs(point.x - bridge.x) < PROFILE_INDEX_EPSILON && earSectorContainsSector(bridge, point))))
+      )) {
+        bridge = point;
+        minimumTangent = tangent;
+      }
+    }
+    point = point.next;
+  } while (point !== stop);
+  return bridge;
+};
+
+const eliminateEarHoles = (data, holes, outer) => {
+  const queue = holes.map(({ start, end }) => earLinkedList(data, start, end, false)).filter(Boolean).map(earLeftmost).sort((first, second) => first.x - second.x);
+  let result = outer;
+  for (const hole of queue) {
+    const bridge = findEarHoleBridge(hole, result);
+    if (!bridge) {
+      throw new Error("The profile hole cannot be connected to its outer boundary.");
+    }
+    const bridgeCopy = splitEarPolygon(bridge, hole);
+    filterEarPoints(bridgeCopy, bridgeCopy.next);
+    result = filterEarPoints(bridge, bridge.next);
+  }
+  return result;
+};
+
+const earOnSegment = (first, point, second) => (
+  point.x <= Math.max(first.x, second.x) && point.x >= Math.min(first.x, second.x) &&
+  point.y <= Math.max(first.y, second.y) && point.y >= Math.min(first.y, second.y)
+);
+
+const earSign = (value) => value > PROFILE_INDEX_EPSILON ? 1 : value < -PROFILE_INDEX_EPSILON ? -1 : 0;
+
+const earIntersects = (firstStart, firstEnd, secondStart, secondEnd) => {
+  const first = earSign(earArea(firstStart, firstEnd, secondStart));
+  const second = earSign(earArea(firstStart, firstEnd, secondEnd));
+  const third = earSign(earArea(secondStart, secondEnd, firstStart));
+  const fourth = earSign(earArea(secondStart, secondEnd, firstEnd));
+  if (first !== second && third !== fourth) {
+    return true;
+  }
+  return (first === 0 && earOnSegment(firstStart, secondStart, firstEnd)) ||
+    (second === 0 && earOnSegment(firstStart, secondEnd, firstEnd)) ||
+    (third === 0 && earOnSegment(secondStart, firstStart, secondEnd)) ||
+    (fourth === 0 && earOnSegment(secondStart, firstEnd, secondEnd));
+};
+
+const earIntersectsPolygon = (first, second) => {
+  let point = first;
+  do {
+    if (point.index !== first.index && point.next.index !== first.index && point.index !== second.index && point.next.index !== second.index && earIntersects(point, point.next, first, second)) {
+      return true;
+    }
+    point = point.next;
+  } while (point !== first);
+  return false;
+};
+
+const earMiddleInside = (first, second) => {
+  let point = first;
+  let inside = false;
+  const x = (first.x + second.x) / 2;
+  const y = (first.y + second.y) / 2;
+  do {
+    if ((point.y > y) !== (point.next.y > y) && x < ((point.next.x - point.x) * (y - point.y)) / (point.next.y - point.y) + point.x) {
+      inside = !inside;
+    }
+    point = point.next;
+  } while (point !== first);
+  return inside;
+};
+
+const earIsValidDiagonal = (first, second) => (
+  first.next.index !== second.index && first.prev.index !== second.index &&
+  !earIntersectsPolygon(first, second) &&
+  ((earLocallyInside(first, second) && earLocallyInside(second, first) && earMiddleInside(first, second) &&
+    (Math.abs(earArea(first.prev, first, second.prev)) > PROFILE_INDEX_EPSILON || Math.abs(earArea(first, second.prev, second)) > PROFILE_INDEX_EPSILON)) ||
+    (earEquals(first, second) && earArea(first.prev, first, first.next) > PROFILE_INDEX_EPSILON && earArea(second.prev, second, second.next) > PROFILE_INDEX_EPSILON))
+);
+
+const cureEarLocalIntersections = (start, triangles) => {
+  let point = start;
+  do {
+    const first = point.prev;
+    const second = point.next.next;
+    if (!earEquals(first, second) && earIntersects(first, point, point.next, second) && earLocallyInside(first, second) && earLocallyInside(second, first)) {
+      triangles.push(first.index, point.index, second.index);
+      removeEarNode(point);
+      removeEarNode(point.next);
+      point = start = second;
+    }
+    point = point.next;
+  } while (point !== start);
+  return filterEarPoints(point);
+};
+
+const splitEarcut = (start, triangles) => {
+  let first = start;
+  do {
+    let second = first.next.next;
+    while (second !== first.prev) {
+      if (first.index !== second.index && earIsValidDiagonal(first, second)) {
+        const split = splitEarPolygon(first, second);
+        const firstRing = filterEarPoints(first, first.next);
+        const secondRing = filterEarPoints(split, split.next);
+        earcutLinked(firstRing, triangles, 0);
+        earcutLinked(secondRing, triangles, 0);
+        return;
+      }
+      second = second.next;
+    }
+    first = first.next;
+  } while (first !== start);
+};
+
+const earcutLinked = (ear, triangles, pass) => {
+  if (!ear) {
+    return;
+  }
+  let stop = ear;
+  while (ear.prev !== ear.next) {
+    const previous = ear.prev;
+    const next = ear.next;
+    if (isEar(ear)) {
+      triangles.push(previous.index, ear.index, next.index);
+      removeEarNode(ear);
+      ear = next.next;
+      stop = next.next;
+      continue;
+    }
+    ear = next;
+    if (ear === stop) {
+      if (pass === 0) {
+        earcutLinked(filterEarPoints(ear), triangles, 1);
+      } else if (pass === 1) {
+        earcutLinked(cureEarLocalIntersections(filterEarPoints(ear), triangles), triangles, 2);
+      } else if (pass === 2) {
+        splitEarcut(ear, triangles);
+      }
+      return;
+    }
+  }
+};
+
+const earcutProfile = (coordinates, holes) => {
+  const outerEnd = holes.length > 0 ? holes[0].start : coordinates.length;
+  let ear = earLinkedList(coordinates, 0, outerEnd, true);
+  if (!ear || ear.next === ear.prev) {
+    throw new Error("The profile cannot be triangulated.");
+  }
+  if (holes.length > 0) {
+    ear = eliminateEarHoles(coordinates, holes, ear);
+  }
+  const triangles = [];
+  earcutLinked(ear, triangles, 0);
+  if (triangles.length === 0) {
+    throw new Error("The profile holes cannot be triangulated.");
+  }
+  return triangles;
+};
+
+const triangulateProfileWithHoles = (points, holes, normal) => {
+  const coordinates = [];
+  const ranges = [];
+  const rings = [points, ...holes];
+  let offset = 0;
+  for (const ring of rings) {
+    const ringCoordinates = profilePlaneCoordinates(ring, normal);
+    if (ringCoordinates.length < 3 || Math.abs(signedProfileArea(ringCoordinates)) <= PROFILE_INDEX_EPSILON) {
+      throw new Error("A profile hole has no usable area.");
+    }
+    coordinates.push(...ringCoordinates);
+    ranges.push({ start: offset, end: offset + ringCoordinates.length });
+    offset += ringCoordinates.length;
+  }
+  return earcutProfile(coordinates, ranges.slice(1));
+};
+
 export const createProfileEntity = (points, name = "Face", normal = null) => {
   if (points.length < 9) {
     throw new Error("A face needs at least three points.");
@@ -470,13 +854,51 @@ export const createArcEntity = (center, start, end, segments = 16, normal = [0, 
   return createEdgeEntity({ name: "Arc", points, metadata: { primitive: "arc", center, radius } });
 };
 
-export const createPrismGeometry = (points, height, normal = [0, 0, 1]) => {
+export const createPrismGeometry = (points, height, normal = [0, 0, 1], holes = []) => {
   const count = points.length / 3;
   if (count < 3) {
     throw new Error("A profile needs at least three points to extrude.");
   }
 
   const direction = normalize3(normal);
+  const validHoles = holes.filter((hole) => Array.isArray(hole) && hole.length >= 9);
+  if (validHoles.length > 0) {
+    const rings = [points, ...validHoles];
+    const bottom = rings.flatMap((ring) => Array.from(ring));
+    const vertexCount = bottom.length / 3;
+    const vertices = Array.from(bottom);
+    for (let index = 0; index < vertexCount; index += 1) {
+      vertices.push(
+        bottom[index * 3] + direction[0] * height,
+        bottom[index * 3 + 1] + direction[1] * height,
+        bottom[index * 3 + 2] + direction[2] * height
+      );
+    }
+    const indices = [];
+    const capIndices = triangulateProfileWithHoles(points, validHoles, direction);
+    const heightDirection = height >= 0 ? direction : scale3(direction, -1);
+    for (let index = 0; index < capIndices.length; index += 3) {
+      appendOrientedTriangle(indices, vertices, capIndices[index], capIndices[index + 1], capIndices[index + 2], scale3(heightDirection, -1));
+      appendOrientedTriangle(indices, vertices, vertexCount + capIndices[index], vertexCount + capIndices[index + 1], vertexCount + capIndices[index + 2], heightDirection);
+    }
+    let ringOffset = 0;
+    for (let ringIndex = 0; ringIndex < rings.length; ringIndex += 1) {
+      const ring = rings[ringIndex];
+      const ringCount = ring.length / 3;
+      const winding = Math.sign(signedProfileArea(profilePlaneCoordinates(ring, direction))) || 1;
+      for (let index = 0; index < ringCount; index += 1) {
+        const next = (index + 1) % ringCount;
+        const first = ringOffset + index;
+        const second = ringOffset + next;
+        const edge = subtract3(ringVertex(vertices, second), ringVertex(vertices, first));
+        const sideNormal = scale3(cross3(edge, direction), winding * (ringIndex === 0 ? 1 : -1));
+        appendOrientedTriangle(indices, vertices, first, second, vertexCount + second, sideNormal);
+        appendOrientedTriangle(indices, vertices, first, vertexCount + second, vertexCount + first, sideNormal);
+      }
+      ringOffset += ringCount;
+    }
+    return { vertices, indices };
+  }
   const vertices = Array.from(points);
   for (let index = 0; index < count; index += 1) {
     vertices.push(
@@ -534,12 +956,12 @@ export const createSweepGeometry = (points, vector) => {
   return { vertices, indices };
 };
 
-export const extrudeProfile = (entity, height) => {
+export const extrudeProfile = (entity, height, holes = []) => {
   if (entity.kind !== "mesh" || !entity.metadata?.profilePoints) {
     throw new Error("Push/Pull needs a planar face created with a drawing tool.");
   }
 
-  const geometry = createPrismGeometry(entity.metadata.profilePoints, height, entity.metadata.profileNormal ?? [0, 0, 1]);
+  const geometry = createPrismGeometry(entity.metadata.profilePoints, height, entity.metadata.profileNormal ?? [0, 0, 1], holes);
   entity.vertices = geometry.vertices;
   entity.indices = geometry.indices;
   entity.name = entity.name.replace(/^(Extruded )?/, "Extruded ");
@@ -547,6 +969,7 @@ export const extrudeProfile = (entity, height) => {
     ...entity.metadata,
     primitive: "extrusion",
     extrusionHeight: height,
+    holeCount: holes.length,
     solid: true,
     planar: false
   };
@@ -637,6 +1060,122 @@ export const entityWorldMatrix = (project, entity) => {
   return matrix;
 };
 
+const pointOnProfileSegment = (point, start, end) => {
+  const cross = (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0]);
+  if (Math.abs(cross) > PROFILE_INDEX_EPSILON) {
+    return false;
+  }
+  return point[0] >= Math.min(start[0], end[0]) - PROFILE_INDEX_EPSILON &&
+    point[0] <= Math.max(start[0], end[0]) + PROFILE_INDEX_EPSILON &&
+    point[1] >= Math.min(start[1], end[1]) - PROFILE_INDEX_EPSILON &&
+    point[1] <= Math.max(start[1], end[1]) + PROFILE_INDEX_EPSILON;
+};
+
+const pointInsideProfile = (point, profile) => {
+  let inside = false;
+  for (let index = 0, previous = profile.length - 1; index < profile.length; previous = index, index += 1) {
+    const start = profile[previous];
+    const end = profile[index];
+    if (pointOnProfileSegment(point, start, end)) {
+      return false;
+    }
+    const crosses = (start[1] > point[1]) !== (end[1] > point[1]);
+    if (crosses && point[0] < ((end[0] - start[0]) * (point[1] - start[1])) / (end[1] - start[1]) + start[0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
+};
+
+const profileSegmentsIntersect = (firstStart, firstEnd, secondStart, secondEnd) => {
+  const orientation = (first, second, third) => (
+    (second[0] - first[0]) * (third[1] - first[1]) - (second[1] - first[1]) * (third[0] - first[0])
+  );
+  const first = orientation(firstStart, firstEnd, secondStart);
+  const second = orientation(firstStart, firstEnd, secondEnd);
+  const third = orientation(secondStart, secondEnd, firstStart);
+  const fourth = orientation(secondStart, secondEnd, firstEnd);
+  if (((first > PROFILE_INDEX_EPSILON && second < -PROFILE_INDEX_EPSILON) || (first < -PROFILE_INDEX_EPSILON && second > PROFILE_INDEX_EPSILON)) &&
+    ((third > PROFILE_INDEX_EPSILON && fourth < -PROFILE_INDEX_EPSILON) || (third < -PROFILE_INDEX_EPSILON && fourth > PROFILE_INDEX_EPSILON))) {
+    return true;
+  }
+  return pointOnProfileSegment(firstStart, secondStart, secondEnd) ||
+    pointOnProfileSegment(firstEnd, secondStart, secondEnd) ||
+    pointOnProfileSegment(secondStart, firstStart, firstEnd) ||
+    pointOnProfileSegment(secondEnd, firstStart, firstEnd);
+};
+
+const profilesIntersect = (first, second) => {
+  for (let firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
+    const firstNext = (firstIndex + 1) % first.length;
+    for (let secondIndex = 0; secondIndex < second.length; secondIndex += 1) {
+      const secondNext = (secondIndex + 1) % second.length;
+      if (profileSegmentsIntersect(first[firstIndex], first[firstNext], second[secondIndex], second[secondNext])) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+const transformedProfilePoints = (project, entity) => {
+  const matrix = entityWorldMatrix(project, entity);
+  const points = [];
+  for (let index = 0; index < entity.metadata.profilePoints.length; index += 3) {
+    points.push(...transformPoint(matrix, [
+      entity.metadata.profilePoints[index],
+      entity.metadata.profilePoints[index + 1],
+      entity.metadata.profilePoints[index + 2]
+    ]));
+  }
+  return points;
+};
+
+export const nestedProfileHoles = (project, outer) => {
+  if (outer.kind !== "mesh" || !outer.metadata?.planar || !Array.isArray(outer.metadata.profilePoints) || !Array.isArray(outer.metadata.profileNormal)) {
+    return [];
+  }
+  const outerMatrix = entityWorldMatrix(project, outer);
+  const inverseOuterMatrix = mat4Invert(outerMatrix);
+  if (!inverseOuterMatrix) {
+    return [];
+  }
+  const outerNormal = normalize3(transformDirection(outerMatrix, outer.metadata.profileNormal));
+  const outerOrigin = transformPoint(outerMatrix, [
+    outer.metadata.profilePoints[0],
+    outer.metadata.profilePoints[1],
+    outer.metadata.profilePoints[2]
+  ]);
+  const outerCoordinates = profilePlaneCoordinates(outer.metadata.profilePoints, outer.metadata.profileNormal);
+  const accepted = [];
+
+  for (const candidate of project.entities) {
+    if (candidate.id === outer.id || candidate.kind !== "mesh" || !candidate.metadata?.planar || !Array.isArray(candidate.metadata.profilePoints) || !Array.isArray(candidate.metadata.profileNormal) || !isEntityVisible(project, candidate)) {
+      continue;
+    }
+    const candidateMatrix = entityWorldMatrix(project, candidate);
+    const candidateNormal = normalize3(transformDirection(candidateMatrix, candidate.metadata.profileNormal));
+    if (Math.abs(dot3(outerNormal, candidateNormal)) < 0.9999) {
+      continue;
+    }
+    const worldPoints = transformedProfilePoints(project, candidate);
+    if (worldPoints.some((_, index) => index % 3 === 0 && Math.abs(dot3(outerNormal, subtract3([worldPoints[index], worldPoints[index + 1], worldPoints[index + 2]], outerOrigin))) > 0.001)) {
+      continue;
+    }
+    const localPoints = [];
+    for (let index = 0; index < worldPoints.length; index += 3) {
+      localPoints.push(...transformPoint(inverseOuterMatrix, [worldPoints[index], worldPoints[index + 1], worldPoints[index + 2]]));
+    }
+    const coordinates = profilePlaneCoordinates(localPoints, outer.metadata.profileNormal);
+    if (!coordinates.every((point) => pointInsideProfile(point, outerCoordinates)) || profilesIntersect(coordinates, outerCoordinates) || accepted.some((hole) => profilesIntersect(coordinates, hole.coordinates) || pointInsideProfile(coordinates[0], hole.coordinates) || pointInsideProfile(hole.coordinates[0], coordinates))) {
+      continue;
+    }
+    accepted.push({ entityId: candidate.id, points: localPoints, coordinates });
+  }
+
+  return accepted.map(({ entityId, points }) => ({ entityId, points }));
+};
+
 export const localPointAt = (points, index) => [points[index * 3], points[index * 3 + 1], points[index * 3 + 2]];
 
 export const meshWorldVertices = (project, entity) => {
@@ -686,9 +1225,8 @@ export const meshEdgeKey = (start, end) => {
   return first < second ? `${first}|${second}` : `${second}|${first}`;
 };
 
-export const edgeIndicesForMesh = (vertices, indices, hiddenEdges = []) => {
+export const edgeIndicesForMesh = (vertices, indices) => {
   const edges = new Map();
-  const hidden = new Set(Array.isArray(hiddenEdges) ? hiddenEdges : []);
   for (let offset = 0; offset < indices.length; offset += 3) {
     const triangle = [indices[offset], indices[offset + 1], indices[offset + 2]];
     const points = triangle.map((vertexIndex) => localPointAt(vertices, vertexIndex));
@@ -704,7 +1242,6 @@ export const edgeIndicesForMesh = (vertices, indices, hiddenEdges = []) => {
   }
 
   return Array.from(edges.values())
-    .filter((edge) => !hidden.has(meshEdgeKey(localPointAt(vertices, edge.indices[0]), localPointAt(vertices, edge.indices[1]))))
     .filter((edge) => edge.normals.length === 1 || edge.normals.some((normal) => dot3(normal, edge.normals[0]) < 0.9999))
     .flatMap((edge) => edge.indices);
 };
@@ -774,23 +1311,6 @@ export const getMeshFaceRegion = (project, entity, triangleIndex) => {
   return { triangleIndices, vertexIndices, normal: seedNormal, point: seedA };
 };
 
-export const hideMeshEdge = (project, entity, start, end) => {
-  if (entity.kind !== "mesh") {
-    throw new Error("Only mesh edges can be deleted.");
-  }
-  const inverseWorldTransform = mat4Invert(entityWorldMatrix(project, entity));
-  if (!inverseWorldTransform) {
-    throw new Error("The edge world transform cannot be inverted.");
-  }
-  const localStart = transformPoint(inverseWorldTransform, start);
-  const localEnd = transformPoint(inverseWorldTransform, end);
-  const key = meshEdgeKey(localStart, localEnd);
-  const hiddenEdges = new Set(entity.metadata?.hiddenEdges ?? []);
-  hiddenEdges.add(key);
-  entity.metadata = { ...entity.metadata, hiddenEdges: Array.from(hiddenEdges) };
-  return true;
-};
-
 export const removeMeshFaces = (entity, triangleIndices) => {
   if (entity.kind !== "mesh") {
     throw new Error("Only mesh faces can be deleted.");
@@ -830,6 +1350,36 @@ export const removeMeshFaces = (entity, triangleIndices) => {
   entity.indices = remappedIndices;
   entity.metadata = { ...metadata, primitive: "edited-mesh", planar: false, solid: false };
   return { removed: removed.size, remaining: remappedIndices.length / 3 };
+};
+
+export const removeMeshEdgeFaces = (project, entity, start, end) => {
+  if (entity.kind !== "mesh" || !Array.isArray(start) || !Array.isArray(end)) {
+    throw new Error("A valid mesh edge is required for deletion.");
+  }
+  const startKey = meshPointKey(start);
+  const endKey = meshPointKey(end);
+  const matchesSelectedEdge = (first, second) => (
+    (meshPointKey(first) === startKey && meshPointKey(second) === endKey) ||
+    (meshPointKey(first) === endKey && meshPointKey(second) === startKey)
+  );
+  const worldVertices = meshWorldVertices(project, entity);
+  const faceTriangles = new Set();
+  for (let triangleIndex = 0; triangleIndex < entity.indices.length / 3; triangleIndex += 1) {
+    const offset = triangleIndex * 3;
+    const triangle = [
+      localPointAt(worldVertices, entity.indices[offset]),
+      localPointAt(worldVertices, entity.indices[offset + 1]),
+      localPointAt(worldVertices, entity.indices[offset + 2])
+    ];
+    if (!triangle.some((point, index) => matchesSelectedEdge(point, triangle[(index + 1) % 3]))) {
+      continue;
+    }
+    const face = getMeshFaceRegion(project, entity, triangleIndex);
+    for (const faceTriangle of face?.triangleIndices ?? []) {
+      faceTriangles.add(faceTriangle);
+    }
+  }
+  return removeMeshFaces(entity, Array.from(faceTriangles));
 };
 
 export const moveMeshFace = (project, entity, faceRegion, distance) => {

@@ -16,12 +16,13 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Non-Select cursor art sits down-left of the exact snap point so it never hides the inference marker.
 - Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
+- Locked objects remain selectable so they can be unlocked from Entity Info; all edit operations remain blocked until unlocked.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
-- **Detachable tools.** Use **Detach tools** to open a draggable floating palette with every tool, then attach it again from the palette's close control.
+- **Detachable tools.** Use **Detach tools** to open a draggable, resizable floating palette. Its tool groups have the same names as the ribbon menus and are separated by section rules.
 - The detachable palette is height-bounded to remain reachable on short browser windows.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
 - **Inference locking.** While drawing, hold `Control` when hovering an inferred edge or face axis to lock the point to that straight line. Release `Control` to unlock.
-- **Protractor-based rotation.** Select a mesh, select Rotate, click a face or edge to place the protractor centre, click a second point to establish the reference ray, move to preview rotation, then click to apply. `Escape` cancels.
+- **Protractor-based rotation.** Select Rotate and grab the exact face or edge point to use as the rotation pivot, then click a second point to establish the reference ray, move to preview rotation, and click to apply. `Escape` cancels.
 - Rotation preserves existing object placement and uses the selected world-space protractor centre.
 
 ## Features
@@ -47,8 +48,9 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Draw on the ground plane or click a model face to draw directly on that face plane.
 - Circle segment count is configurable from **Segments** on Home or Draw, and can be entered as `radius, segments` in Measurements.
 - Circular faces render as one plain face; their triangles are retained internally only for robust geometry and STL export.
-- Select individual mesh faces and visible mesh edges. A selected component receives a subtle local highlight rather than recolouring the whole mesh. Delete removes a selected face, removes a standalone line, or hides a selected mesh edge without deleting its neighbouring faces.
+- Select individual mesh faces and visible mesh edges. A selected component receives a subtle local highlight rather than recolouring the whole mesh. Delete removes a selected face, removes a standalone line, and removes all planar faces joined by a selected mesh edge.
 - Push/Pull of a circular face through an axis-aligned Box produces a closed circular through-hole rather than an overlapping cylinder. Unsupported placements fail safely rather than creating an overlapping solid.
+- An outer planar profile consumes enclosed coplanar profiles as holes during Push/Pull, so a circle drawn inside a square becomes a real circular opening in the resulting solid.
 - Dimensioned box and cylinder creation.
 - Push/Pull is click-move-click: click a face, inspect the live shape preview as the pointer moves, then click again to commit. Escape cancels the preview.
 - Offset planar faces and create a straight-vector Follow Me sweep.
@@ -60,7 +62,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 
 - Orbit, pan, zoom, top/front/right/isometric views, and Zoom Extents.
 - Perspective or parallel projection.
-- Grid and mesh-edge toggles, with flat face colours by default. Face back-sides are shown in blue to make reversed winding visible.
+- Grid and mesh-edge toggles, with thicker red, green, and blue world axes plus high-visibility live drawing previews. Face back-sides are shown in blue to make reversed winding visible.
 - Wheel zoom slows proportionally as the camera approaches the model for fine positioning.
 - Orbit is continuous over top and bottom views, with a pole-safe camera basis so it does not block or snap when passing above a model.
 - Light theme by default plus a dark-theme option.

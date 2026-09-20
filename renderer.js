@@ -172,6 +172,34 @@ const makeBuffer = (gl, target, data, usage = gl.STATIC_DRAW) => {
   return buffer;
 };
 
+const segmentData = (points, paired = false) => {
+  const starts = [];
+  const ends = [];
+  const step = paired ? 6 : 3;
+  for (let offset = 0; offset + 5 < points.length; offset += step) {
+    starts.push(points[offset], points[offset + 1], points[offset + 2]);
+    ends.push(points[offset + 3], points[offset + 4], points[offset + 5]);
+  }
+  return { starts: new Float32Array(starts), ends: new Float32Array(ends), count: starts.length / 3 };
+};
+
+const makeSegmentBuffers = (gl, points, paired = false, usage = gl.STATIC_DRAW) => {
+  const data = segmentData(points, paired);
+  return {
+    start: makeBuffer(gl, gl.ARRAY_BUFFER, data.starts, usage),
+    end: makeBuffer(gl, gl.ARRAY_BUFFER, data.ends, usage),
+    count: data.count
+  };
+};
+
+const deleteSegmentBuffers = (gl, segments) => {
+  if (!segments) {
+    return;
+  }
+  gl.deleteBuffer(segments.start);
+  gl.deleteBuffer(segments.end);
+};
+
 const deleteBuffers = (gl, record) => {
   for (const key of ["position", "normal", "indices", "edgeStart", "edgeEnd"]) {
     if (record[key]) {
@@ -218,8 +246,9 @@ export class Renderer {
     this.meshCache = new Map();
     this.lineCache = new Map();
     this.previewBuffer = null;
-    this.gridBuffer = null;
-    this.axisBuffer = null;
+    this.previewSegments = null;
+    this.gridSegments = null;
+    this.axisSegments = [];
     this.width = 1;
     this.height = 1;
     this.pixelRatio = 1;
@@ -281,13 +310,12 @@ export class Renderer {
       gridPoints.push(-extent, coordinate, 0, extent, coordinate, 0);
       gridPoints.push(coordinate, -extent, 0, coordinate, extent, 0);
     }
-    this.gridBuffer = makeBuffer(this.gl, this.gl.ARRAY_BUFFER, new Float32Array(gridPoints));
-    this.gridCount = gridPoints.length / 3;
-    this.axisBuffer = makeBuffer(this.gl, this.gl.ARRAY_BUFFER, new Float32Array([
-      -1000, 0, 0, 1000, 0, 0,
-      0, -1000, 0, 0, 1000, 0,
-      0, 0, -1000, 0, 0, 1000
-    ]));
+    this.gridSegments = makeSegmentBuffers(this.gl, gridPoints, true);
+    this.axisSegments = [
+      makeSegmentBuffers(this.gl, [-1000, 0, 0, 1000, 0, 0], true),
+      makeSegmentBuffers(this.gl, [0, -1000, 0, 0, 1000, 0], true),
+      makeSegmentBuffers(this.gl, [0, 0, -1000, 0, 0, 1000], true)
+    ];
   }
 
   resize() {
@@ -344,7 +372,7 @@ export class Renderer {
 
   ensureMesh(entity) {
     const existing = this.meshCache.get(entity.id);
-    if (existing && existing.vertices === entity.vertices && existing.indicesSource === entity.indices && existing.hiddenEdgesSource === entity.metadata?.hiddenEdges) {
+    if (existing && existing.vertices === entity.vertices && existing.indicesSource === entity.indices) {
       return existing;
     }
     if (existing) {
@@ -353,7 +381,7 @@ export class Renderer {
     const { gl } = this;
     const vertexData = new Float32Array(entity.vertices);
     const indexData = vertexData.length / 3 > 65535 ? new Uint32Array(entity.indices) : new Uint16Array(entity.indices);
-    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.hiddenEdges);
+    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices);
     const edgeStartData = new Float32Array((edgeSource.length / 2) * 3);
     const edgeEndData = new Float32Array((edgeSource.length / 2) * 3);
     for (let index = 0; index < edgeSource.length; index += 2) {
@@ -366,7 +394,6 @@ export class Renderer {
     const record = {
       vertices: entity.vertices,
       indicesSource: entity.indices,
-      hiddenEdgesSource: entity.metadata?.hiddenEdges,
       position: makeBuffer(gl, gl.ARRAY_BUFFER, vertexData),
       normal: makeBuffer(gl, gl.ARRAY_BUFFER, new Float32Array(computeNormals(entity.vertices, entity.indices))),
       indices: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indexData),
@@ -429,21 +456,40 @@ export class Renderer {
     gl.drawArrays(mode ?? gl.LINE_STRIP, 0, count);
   }
 
+  drawThickSegments(segments, model, viewProjection, color, thickness) {
+    if (!segments?.count) {
+      return;
+    }
+    const { gl, edgeProgram } = this;
+    gl.useProgram(edgeProgram.program);
+    this.resetVertexAttributes();
+    gl.bindBuffer(gl.ARRAY_BUFFER, segments.start);
+    gl.enableVertexAttribArray(edgeProgram.attributes.aStart);
+    gl.vertexAttribPointer(edgeProgram.attributes.aStart, 3, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(edgeProgram.attributes.aStart, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, segments.end);
+    gl.enableVertexAttribArray(edgeProgram.attributes.aEnd);
+    gl.vertexAttribPointer(edgeProgram.attributes.aEnd, 3, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(edgeProgram.attributes.aEnd, 1);
+    gl.uniformMatrix4fv(edgeProgram.uniforms.uModel, false, model);
+    gl.uniformMatrix4fv(edgeProgram.uniforms.uViewProjection, false, viewProjection);
+    gl.uniform4fv(edgeProgram.uniforms.uColor, color);
+    gl.uniform2f(edgeProgram.uniforms.uViewport, this.width, this.height);
+    gl.uniform1f(edgeProgram.uniforms.uThickness, thickness * this.pixelRatio);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, segments.count);
+    this.resetVertexAttributes();
+  }
+
   drawGrid(viewProjection, visible, appearance) {
     if (!visible) {
       return;
     }
     const { gl } = this;
-    this.useLineProgram(viewProjection, 4);
     gl.disable(gl.DEPTH_TEST);
-    this.drawLines(this.gridBuffer, this.gridCount, mat4Identity(), colorWithAlpha(appearance.gridColor, 0.45), gl.LINES);
-    this.drawLines(this.axisBuffer, 2, mat4Identity(), [0.86, 0.25, 0.28, 0.78], gl.LINES);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.axisBuffer);
-    gl.vertexAttribPointer(this.lineProgram.attributes.aPosition, 3, gl.FLOAT, false, 0, 0);
-    gl.uniform4fv(this.lineProgram.uniforms.uColor, [0.3, 0.88, 0.48, 0.72]);
-    gl.drawArrays(gl.LINES, 2, 2);
-    gl.uniform4fv(this.lineProgram.uniforms.uColor, [0.32, 0.62, 1, 0.72]);
-    gl.drawArrays(gl.LINES, 4, 2);
+    this.drawThickSegments(this.gridSegments, mat4Identity(), viewProjection, colorWithAlpha(appearance.gridColor, 0.45), 0.7);
+    this.drawThickSegments(this.axisSegments[0], mat4Identity(), viewProjection, [0.86, 0.25, 0.28, 0.9], 1.65);
+    this.drawThickSegments(this.axisSegments[1], mat4Identity(), viewProjection, [0.3, 0.88, 0.48, 0.84], 1.65);
+    this.drawThickSegments(this.axisSegments[2], mat4Identity(), viewProjection, [0.32, 0.62, 1, 0.84], 1.65);
     gl.enable(gl.DEPTH_TEST);
   }
 
@@ -553,11 +599,27 @@ export class Renderer {
     if (!this.previewBuffer) {
       this.previewBuffer = gl.createBuffer();
     }
+    if (!this.previewSegments) {
+      this.previewSegments = {
+        start: gl.createBuffer(),
+        end: gl.createBuffer(),
+        count: 0
+      };
+    }
+    if (!this.previewSegments.start || !this.previewSegments.end) {
+      throw new Error("WebGL could not allocate preview buffers.");
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.previewBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(points), gl.DYNAMIC_DRAW);
-    this.useLineProgram(viewProjection, pointSize);
-    this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, gl.LINE_STRIP);
+    const segments = segmentData(points);
+    this.previewSegments.count = segments.count;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.previewSegments.start);
+    gl.bufferData(gl.ARRAY_BUFFER, segments.starts, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.previewSegments.end);
+    gl.bufferData(gl.ARRAY_BUFFER, segments.ends, gl.DYNAMIC_DRAW);
+    this.drawThickSegments(this.previewSegments, mat4Identity(), viewProjection, color, Math.max(1.75, pointSize * 0.35));
     if (pointsMode) {
+      this.useLineProgram(viewProjection, pointSize);
       this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, gl.POINTS);
     }
   }
@@ -587,7 +649,7 @@ export class Renderer {
     }
     this.drawSection(section, product);
     if (preview?.points?.length) {
-      this.drawPreview(preview.points, product, preview.color, preview.pointsMode, Math.max(5, appearance.edgeWidth * 2));
+      this.drawPreview(preview.points, product, preview.color, preview.pointsMode, Math.max(8, appearance.edgeWidth * 3));
     }
     return { projection, view, viewProjection: product };
   }
@@ -598,11 +660,10 @@ export class Renderer {
     if (this.previewBuffer) {
       gl.deleteBuffer(this.previewBuffer);
     }
-    if (this.gridBuffer) {
-      gl.deleteBuffer(this.gridBuffer);
-    }
-    if (this.axisBuffer) {
-      gl.deleteBuffer(this.axisBuffer);
+    deleteSegmentBuffers(gl, this.previewSegments);
+    deleteSegmentBuffers(gl, this.gridSegments);
+    for (const segments of this.axisSegments) {
+      deleteSegmentBuffers(gl, segments);
     }
     gl.deleteProgram(this.meshProgram.program);
     gl.deleteProgram(this.lineProgram.program);
