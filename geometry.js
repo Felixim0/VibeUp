@@ -1187,6 +1187,170 @@ export const meshWorldVertices = (project, entity) => {
   return vertices;
 };
 
+const faceBoundaryLoop = (project, entity, faceRegion) => {
+  const vertices = meshWorldVertices(project, entity);
+  const edges = new Map();
+  for (const triangleIndex of faceRegion.triangleIndices) {
+    const offset = triangleIndex * 3;
+    const triangle = [entity.indices[offset], entity.indices[offset + 1], entity.indices[offset + 2]];
+    for (let index = 0; index < 3; index += 1) {
+      const start = localPointAt(vertices, triangle[index]);
+      const end = localPointAt(vertices, triangle[(index + 1) % 3]);
+      const key = meshEdgeKey(start, end);
+      const edge = edges.get(key) ?? { start, end, count: 0 };
+      edge.count += 1;
+      edges.set(key, edge);
+    }
+  }
+  const boundary = Array.from(edges.values()).filter((edge) => edge.count === 1);
+  if (boundary.length < 3) {
+    return null;
+  }
+  const remaining = boundary.slice(1);
+  const loop = [boundary[0].start, boundary[0].end];
+  while (remaining.length > 0) {
+    const current = loop[loop.length - 1];
+    const key = meshPointKey(current);
+    const nextIndex = remaining.findIndex((edge) => meshPointKey(edge.start) === key || meshPointKey(edge.end) === key);
+    if (nextIndex < 0) {
+      return null;
+    }
+    const [edge] = remaining.splice(nextIndex, 1);
+    loop.push(meshPointKey(edge.start) === key ? edge.end : edge.start);
+  }
+  if (meshPointKey(loop[0]) !== meshPointKey(loop[loop.length - 1])) {
+    return null;
+  }
+  loop.pop();
+  return loop;
+};
+
+const profilesOnFace = (project, entity, faceRegion) => {
+  const outer = faceBoundaryLoop(project, entity, faceRegion);
+  if (!outer) {
+    return [];
+  }
+  const outerPoints = outer.flat();
+  const outerCoordinates = profilePlaneCoordinates(outerPoints, faceRegion.normal);
+  const accepted = [];
+  for (const candidate of project.entities) {
+    if (candidate.id === entity.id || candidate.kind !== "mesh" || !candidate.metadata?.planar || !Array.isArray(candidate.metadata.profilePoints) || !Array.isArray(candidate.metadata.profileNormal) || !isEntityVisible(project, candidate)) {
+      continue;
+    }
+    const candidateMatrix = entityWorldMatrix(project, candidate);
+    const candidateNormal = normalize3(transformDirection(candidateMatrix, candidate.metadata.profileNormal));
+    if (Math.abs(dot3(faceRegion.normal, candidateNormal)) < 0.9999) {
+      continue;
+    }
+    const points = transformedProfilePoints(project, candidate);
+    if (points.some((_, index) => index % 3 === 0 && Math.abs(dot3(faceRegion.normal, subtract3([points[index], points[index + 1], points[index + 2]], faceRegion.point))) > 0.001)) {
+      continue;
+    }
+    const coordinates = profilePlaneCoordinates(points, faceRegion.normal);
+    if (!coordinates.every((point) => pointInsideProfile(point, outerCoordinates)) || profilesIntersect(coordinates, outerCoordinates) || accepted.some((hole) => profilesIntersect(coordinates, hole.coordinates) || pointInsideProfile(coordinates[0], hole.coordinates) || pointInsideProfile(hole.coordinates[0], coordinates))) {
+      continue;
+    }
+    accepted.push({ entityId: candidate.id, points, coordinates });
+  }
+  return accepted.map(({ entityId, points }) => ({ entityId, points }));
+};
+
+const appendWorldTriangle = (vertices, indices, vertexMap, inverseWorldTransform, first, second, third, normal) => {
+  const addVertex = (point) => {
+    const local = transformPoint(inverseWorldTransform, point);
+    const key = meshPointKey(local);
+    const existing = vertexMap.get(key);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const index = vertices.length / 3;
+    vertexMap.set(key, index);
+    vertices.push(...local);
+    return index;
+  };
+  const winding = dot3(cross3(subtract3(second, first), subtract3(third, first)), normal);
+  const order = winding >= 0 ? [first, second, third] : [first, third, second];
+  indices.push(...order.map(addVertex));
+};
+
+export const faceProfileHoles = profilesOnFace;
+
+export const extrudeMeshFaceWithProfileHoles = (project, entity, faceRegion, holes, distance) => {
+  if (entity.kind !== "mesh" || !faceRegion || !Array.isArray(holes) || holes.length === 0 || !Number.isFinite(distance) || Math.abs(distance) < EPSILON) {
+    throw new Error("A face, nested profiles, and a non-zero Push/Pull distance are required.");
+  }
+  const outer = faceBoundaryLoop(project, entity, faceRegion);
+  if (!outer) {
+    throw new Error("The selected face has no usable boundary for an indented extrusion.");
+  }
+  const inverseWorldTransform = mat4Invert(entityWorldMatrix(project, entity));
+  if (!inverseWorldTransform) {
+    throw new Error("The selected face transform cannot be inverted.");
+  }
+  const removed = new Set(faceRegion.triangleIndices);
+  const indices = [];
+  for (let triangleIndex = 0; triangleIndex < entity.indices.length / 3; triangleIndex += 1) {
+    if (!removed.has(triangleIndex)) {
+      indices.push(...entity.indices.slice(triangleIndex * 3, triangleIndex * 3 + 3));
+    }
+  }
+  const vertices = Array.from(entity.vertices);
+  const vertexMap = new Map();
+  for (let index = 0; index < vertices.length / 3; index += 1) {
+    vertexMap.set(meshPointKey(localPointAt(vertices, index)), index);
+  }
+  const normal = normalize3(faceRegion.normal);
+  const outerPoints = outer.flat();
+  const holePoints = holes.map((hole) => Array.from(hole.points));
+  const topOuter = outer.map((point) => add3(point, scale3(normal, distance)));
+  const topHoles = holePoints.map((ring) => {
+    const points = [];
+    for (let index = 0; index < ring.length; index += 3) {
+      points.push(add3([ring[index], ring[index + 1], ring[index + 2]], scale3(normal, distance)));
+    }
+    return points;
+  });
+  const capIndices = triangulateProfileWithHoles(outerPoints, holePoints, normal);
+  const topRings = [topOuter, ...topHoles];
+  const topPoints = topRings.flat();
+  for (let index = 0; index < capIndices.length; index += 3) {
+    appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, topPoints[capIndices[index]], topPoints[capIndices[index + 1]], topPoints[capIndices[index + 2]], normal);
+  }
+  const outerWinding = Math.sign(signedProfileArea(profilePlaneCoordinates(outerPoints, normal))) || 1;
+  for (let index = 0; index < outer.length; index += 1) {
+    const next = (index + 1) % outer.length;
+    const sideNormal = scale3(cross3(subtract3(outer[next], outer[index]), normal), outerWinding);
+    appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, outer[index], outer[next], topOuter[next], sideNormal);
+    appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, outer[index], topOuter[next], topOuter[index], sideNormal);
+  }
+  for (let ringIndex = 0; ringIndex < holePoints.length; ringIndex += 1) {
+    const ring = holePoints[ringIndex];
+    const topRing = topHoles[ringIndex];
+    const count = ring.length / 3;
+    const winding = Math.sign(signedProfileArea(profilePlaneCoordinates(ring, normal))) || 1;
+    const floorIndices = triangulateProfile(ring, normal);
+    for (let index = 0; index < floorIndices.length; index += 3) {
+      const first = [ring[floorIndices[index] * 3], ring[floorIndices[index] * 3 + 1], ring[floorIndices[index] * 3 + 2]];
+      const second = [ring[floorIndices[index + 1] * 3], ring[floorIndices[index + 1] * 3 + 1], ring[floorIndices[index + 1] * 3 + 2]];
+      const third = [ring[floorIndices[index + 2] * 3], ring[floorIndices[index + 2] * 3 + 1], ring[floorIndices[index + 2] * 3 + 2]];
+      appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, first, second, third, normal);
+    }
+    for (let index = 0; index < count; index += 1) {
+      const next = (index + 1) % count;
+      const first = [ring[index * 3], ring[index * 3 + 1], ring[index * 3 + 2]];
+      const second = [ring[next * 3], ring[next * 3 + 1], ring[next * 3 + 2]];
+      const sideNormal = scale3(cross3(subtract3(second, first), normal), -winding);
+      appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, first, second, topRing[next], sideNormal);
+      appendWorldTriangle(vertices, indices, vertexMap, inverseWorldTransform, first, topRing[next], topRing[index], sideNormal);
+    }
+  }
+  entity.vertices = vertices;
+  entity.indices = indices;
+  entity.metadata = { ...entity.metadata, primitive: "edited-mesh", planar: false, solid: entity.metadata?.solid === true, holeCount: holePoints.length };
+  delete entity.metadata.dimensions;
+  return entity;
+};
+
 export const meshWorldTriangleIterator = function* (project, entity) {
   if (entity.kind !== "mesh") {
     return;
@@ -1352,9 +1516,9 @@ export const removeMeshFaces = (entity, triangleIndices) => {
   return { removed: removed.size, remaining: remappedIndices.length / 3 };
 };
 
-export const removeMeshEdgeFaces = (project, entity, start, end) => {
+export const meshEdgeFaceTriangleIndices = (project, entity, start, end) => {
   if (entity.kind !== "mesh" || !Array.isArray(start) || !Array.isArray(end)) {
-    throw new Error("A valid mesh edge is required for deletion.");
+    return [];
   }
   const startKey = meshPointKey(start);
   const endKey = meshPointKey(end);
@@ -1379,7 +1543,14 @@ export const removeMeshEdgeFaces = (project, entity, start, end) => {
       faceTriangles.add(faceTriangle);
     }
   }
-  return removeMeshFaces(entity, Array.from(faceTriangles));
+  return Array.from(faceTriangles);
+};
+
+export const removeMeshEdgeFaces = (project, entity, start, end) => {
+  if (entity.kind !== "mesh" || !Array.isArray(start) || !Array.isArray(end)) {
+    throw new Error("A valid mesh edge is required for deletion.");
+  }
+  return removeMeshFaces(entity, meshEdgeFaceTriangleIndices(project, entity, start, end));
 };
 
 export const moveMeshFace = (project, entity, faceRegion, distance) => {

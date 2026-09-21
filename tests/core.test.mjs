@@ -14,13 +14,16 @@ import {
   createRectangleEntity,
   createSweepGeometry,
   entityBounds,
+  extrudeMeshFaceWithProfileHoles,
   extrudeProfile,
+  faceProfileHoles,
   getEntity,
   getMeshFaceRegion,
   explodeGroup,
   makeGroup,
   moveMeshFace,
   meshReport,
+  meshEdgeFaceTriangleIndices,
   meshWorldVertices,
   nestedProfileHoles,
   projectBounds,
@@ -258,6 +261,23 @@ test("selected box face moves independently with Push/Pull", () => {
   assert.equal(bounds.min[2], 0);
 });
 
+test("Push/Pull keeps a nested profile as an indented box-face opening", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const topFace = getMeshFaceRegion(project, box, 2);
+  assert.ok(topFace);
+  const circle = addEntity(project, createCircleEntity([0, 0, 40], 20, 18, "Circle", [0, 0, 1]));
+  const holes = faceProfileHoles(project, box, topFace);
+  assert.equal(holes.length, 1);
+  assert.equal(holes[0].entityId, circle.id);
+  extrudeMeshFaceWithProfileHoles(project, box, topFace, holes, 20);
+  const report = meshReport(project, [box]);
+  assert.equal(report.degenerateCount, 0);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+  assert.equal(entityBounds(project, box).max[2], 60);
+});
+
 test("deleting a selected mesh face preserves the remaining faces", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(20, 20, 20));
@@ -281,6 +301,13 @@ test("deleting a selected mesh edge removes every face incident to it", () => {
   assert.equal(result.remaining, 8);
   assert.equal(box.indices.length / 3, 8);
   assert.equal(box.metadata.solid, false);
+});
+
+test("mesh edge face lookup reports the same cascaded face region", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(20, 20, 20));
+  const triangles = meshEdgeFaceTriangleIndices(project, box, [-10, -10, 0], [10, -10, 0]);
+  assert.equal(triangles.length, 4);
 });
 
 test("zoom becomes less sensitive near the model", () => {
@@ -331,6 +358,17 @@ test("camera pan remains usable at both poles", () => {
     assert.notDeepEqual(camera.target, originalTarget);
     assert.ok(camera.target.every(Number.isFinite));
   }
+});
+
+test("orbit can retarget to the grabbed model point without moving the eye", () => {
+  const camera = new OrbitCamera();
+  const position = camera.getPosition();
+  const pivot = [25, -30, 15];
+  camera.orbitAround(pivot);
+  assert.ok(camera.getPosition().every((value, index) => Math.abs(value - position[index]) < 0.000001));
+  assert.deepEqual(camera.target, pivot);
+  camera.orbit(20, -10);
+  assert.ok(camera.getPosition().every(Number.isFinite));
 });
 
 test("a vertical-face rectangle remains on its plane after an exact extrusion", () => {

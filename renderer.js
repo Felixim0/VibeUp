@@ -201,7 +201,7 @@ const deleteSegmentBuffers = (gl, segments) => {
 };
 
 const deleteBuffers = (gl, record) => {
-  for (const key of ["position", "normal", "indices", "edgeStart", "edgeEnd"]) {
+  for (const key of ["position", "normal", "indices", "edgeStart", "edgeEnd", "segmentStart", "segmentEnd"]) {
     if (record[key]) {
       gl.deleteBuffer(record[key]);
     }
@@ -424,8 +424,15 @@ export class Renderer {
       source,
       closed: entity.closed,
       position: makeBuffer(this.gl, this.gl.ARRAY_BUFFER, new Float32Array(points)),
-      count: points.length / 3
+      count: points.length / 3,
+      segmentStart: null,
+      segmentEnd: null,
+      segmentCount: 0
     };
+    const segments = segmentData(points);
+    record.segmentStart = makeBuffer(this.gl, this.gl.ARRAY_BUFFER, segments.starts);
+    record.segmentEnd = makeBuffer(this.gl, this.gl.ARRAY_BUFFER, segments.ends);
+    record.segmentCount = segments.count;
     this.lineCache.set(entity.id, record);
     return record;
   }
@@ -493,7 +500,7 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST);
   }
 
-  drawMesh(entity, material, model, viewProjection, settings, selected, componentSelection, section) {
+  drawMesh(entity, material, model, viewProjection, settings, selected, componentSelections, section) {
     const { gl, meshProgram } = this;
     const record = this.ensureMesh(entity);
     gl.useProgram(meshProgram.program);
@@ -506,7 +513,7 @@ export class Renderer {
     gl.vertexAttribPointer(meshProgram.attributes.aNormal, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, record.indices);
     const color = hexToRgb(material?.color);
-    const objectSelected = selected && !componentSelection;
+    const objectSelected = selected && componentSelections.length === 0;
     gl.uniformMatrix4fv(meshProgram.uniforms.uModel, false, model);
     gl.uniformMatrix4fv(meshProgram.uniforms.uViewProjection, false, viewProjection);
     gl.uniform3fv(meshProgram.uniforms.uColor, color);
@@ -535,13 +542,16 @@ export class Renderer {
       gl.uniformMatrix4fv(edgeProgram.uniforms.uViewProjection, false, viewProjection);
       gl.uniform4fv(edgeProgram.uniforms.uColor, objectSelected ? colorWithAlpha(settings.appearance.selectionColor, 0.82) : colorWithAlpha(settings.appearance.edgeColor, 0.92));
       gl.uniform2f(edgeProgram.uniforms.uViewport, this.width, this.height);
-      gl.uniform1f(edgeProgram.uniforms.uThickness, Math.max(objectSelected ? 1.25 : 1, settings.appearance.edgeWidth) * 2 * this.pixelRatio);
+      gl.uniform1f(edgeProgram.uniforms.uThickness, Math.max(objectSelected ? 1.3 : 0.7, settings.appearance.edgeWidth * 0.62) * this.pixelRatio);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, record.edgeCount);
       this.resetVertexAttributes();
     }
 
-    if (componentSelection?.type === "face") {
+    for (const componentSelection of componentSelections.filter((component) => component.type === "face")) {
       const faceIndices = componentSelection.triangleIndices.flatMap((triangleIndex) => entity.indices.slice(triangleIndex * 3, triangleIndex * 3 + 3));
+      if (faceIndices.length === 0) {
+        continue;
+      }
       const indexData = record.indexType === gl.UNSIGNED_INT ? new Uint32Array(faceIndices) : new Uint16Array(faceIndices);
       const faceBuffer = makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indexData, gl.DYNAMIC_DRAW);
       gl.useProgram(meshProgram.program);
@@ -559,18 +569,23 @@ export class Renderer {
       gl.uniform3fv(meshProgram.uniforms.uLightDirection, [0, 0, 1]);
       gl.uniform1i(meshProgram.uniforms.uShadows, 0);
       gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, hexToRgb(settings.appearance.selectionColor));
-      gl.uniform1f(meshProgram.uniforms.uOpacity, 0.34);
+      gl.uniform1f(meshProgram.uniforms.uOpacity, 0.26);
       gl.uniform1i(meshProgram.uniforms.uSectionEnabled, section ? 1 : 0);
       gl.uniform3fv(meshProgram.uniforms.uSectionPoint, section?.point ?? [0, 0, 0]);
       gl.uniform3fv(meshProgram.uniforms.uSectionNormal, section?.normal ?? [0, 0, 1]);
       gl.drawElements(gl.TRIANGLES, indexData.length, record.indexType, 0);
       gl.deleteBuffer(faceBuffer);
+      for (const edge of componentSelection.edges ?? []) {
+        const edgeBuffer = makeSegmentBuffers(gl, [...edge.start, ...edge.end], true, gl.DYNAMIC_DRAW);
+        this.drawThickSegments(edgeBuffer, mat4Identity(), viewProjection, colorWithAlpha(settings.appearance.selectionColor, 0.9), Math.max(1.3, settings.appearance.edgeWidth * 0.65));
+        deleteSegmentBuffers(gl, edgeBuffer);
+      }
     }
 
-    if (componentSelection?.type === "edge") {
+    for (const componentSelection of componentSelections.filter((component) => component.type === "edge")) {
       const endpoints = new Float32Array([...componentSelection.start, ...componentSelection.end]);
       const edgeBuffer = makeBuffer(gl, gl.ARRAY_BUFFER, endpoints, gl.DYNAMIC_DRAW);
-      this.useLineProgram(viewProjection, Math.max(4, settings.appearance.edgeWidth * 2));
+      this.useLineProgram(viewProjection, Math.max(3, settings.appearance.edgeWidth * 1.25));
       this.drawLines(edgeBuffer, 2, mat4Identity(), colorWithAlpha(settings.appearance.selectionColor, 0.88), gl.LINES);
       gl.deleteBuffer(edgeBuffer);
     }
@@ -578,9 +593,13 @@ export class Renderer {
 
   drawEntityLine(entity, model, viewProjection, selected, appearance) {
     const record = this.ensureLine(entity);
-    this.useLineProgram(viewProjection, Math.max(4, appearance.edgeWidth * 2));
-    this.gl.lineWidth(Math.max(1, appearance.edgeWidth * this.pixelRatio));
-    this.drawLines(record.position, record.count, model, selected ? colorWithAlpha(appearance.selectionColor, 0.82) : colorWithAlpha(appearance.edgeColor, 1));
+    this.drawThickSegments(
+      { start: record.segmentStart, end: record.segmentEnd, count: record.segmentCount },
+      model,
+      viewProjection,
+      selected ? colorWithAlpha(appearance.selectionColor, 0.82) : colorWithAlpha(appearance.edgeColor, 1),
+      Math.max(selected ? 1.35 : 0.85, appearance.edgeWidth * 0.55)
+    );
   }
 
   drawSection(section, viewProjection) {
@@ -617,11 +636,13 @@ export class Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, segments.starts, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.previewSegments.end);
     gl.bufferData(gl.ARRAY_BUFFER, segments.ends, gl.DYNAMIC_DRAW);
+    gl.disable(gl.DEPTH_TEST);
     this.drawThickSegments(this.previewSegments, mat4Identity(), viewProjection, color, Math.max(1.75, pointSize * 0.35));
     if (pointsMode) {
       this.useLineProgram(viewProjection, pointSize);
       this.drawLines(this.previewBuffer, points.length / 3, mat4Identity(), color, gl.POINTS);
     }
+    gl.enable(gl.DEPTH_TEST);
   }
 
   render(project, camera, selection = new Set(), componentSelection = null, preview = null) {
@@ -641,8 +662,10 @@ export class Renderer {
       const model = entityWorldMatrix(project, entity);
       if (entity.kind === "mesh") {
         const material = project.materials.find((candidate) => candidate.id === entity.materialId) ?? project.materials[0];
-        const entityComponentSelection = componentSelection?.entityId === entity.id ? componentSelection : null;
-        this.drawMesh(entity, material, model, product, project.settings, selection.has(entity.id), entityComponentSelection, section);
+        const entityComponentSelections = componentSelection?.type === "multi"
+          ? componentSelection.components.filter((component) => component.entityId === entity.id)
+          : componentSelection?.entityId === entity.id ? [componentSelection] : [];
+        this.drawMesh(entity, material, model, product, project.settings, selection.has(entity.id), entityComponentSelections, section);
       } else if (entity.kind === "edge" || entity.kind === "annotation") {
         this.drawEntityLine(entity, model, product, selection.has(entity.id), appearance);
       }

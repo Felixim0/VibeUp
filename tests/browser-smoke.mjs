@@ -60,8 +60,8 @@ const readAutosavedCamera = () => page.evaluate(async () => new Promise((resolve
 }));
 const saveLiveCamera = async (canvasBox) => {
   await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
-  await page.mouse.down({ button: "right" });
-  await page.mouse.up({ button: "right" });
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.up({ button: "middle" });
   await page.waitForTimeout(900);
   return readAutosavedCamera();
 };
@@ -133,6 +133,14 @@ try {
   const paletteResize = await page.locator("#floating-palette").evaluate((palette) => getComputedStyle(palette).resize);
   if (paletteResize !== "both") {
     throw new Error(`Floating palette is not resizable: ${paletteResize}`);
+  }
+  const detachedRibbonVisible = await page.locator("#ribbon").evaluate((ribbon) => getComputedStyle(ribbon).display !== "none");
+  if (detachedRibbonVisible) {
+    throw new Error("The empty detached ribbon remains visible instead of returning workspace height.");
+  }
+  const paletteMinWidth = await page.locator("#floating-palette").evaluate((palette) => getComputedStyle(palette).minWidth);
+  if (paletteMinWidth !== "128px") {
+    throw new Error(`Detached palette cannot shrink to the compact minimum width: ${paletteMinWidth}`);
   }
   await page.locator("#attach-ribbon-button").click();
   if (!await page.locator("#floating-palette").isHidden()) {
@@ -225,6 +233,18 @@ try {
   if (!selectionState?.includes("face selected")) {
     throw new Error(`Viewport click did not select a mesh face: ${selectionState}`);
   }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  const doubleClickStatus = await page.locator("#status-message").textContent();
+  if (!doubleClickStatus?.includes("boundary edges selected")) {
+    throw new Error(`Double-click did not select the full face boundary: ${doubleClickStatus}`);
+  }
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  const tripleClickStatus = await page.locator("#status-message").textContent();
+  if (!tripleClickStatus?.includes("touching components selected")) {
+    throw new Error(`Triple-click did not select connected geometry: ${tripleClickStatus}`);
+  }
+  await page.waitForTimeout(550);
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
   const rowsBeforeFaceDelete = await page.locator(".outliner-row").count();
   await page.keyboard.press("Delete");
   const rowsAfterFaceDelete = await page.locator(".outliner-row").count();
@@ -269,6 +289,15 @@ try {
   }
   await page.getByText("Camera", { exact: true }).click();
   await page.getByTitle("Orbit camera (O)").click();
+  const cameraBeforePivotOrbit = await readAutosavedCamera();
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.56, canvasBox.y + canvasBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.58, canvasBox.y + canvasBox.height * 0.48, { steps: 2 });
+  await page.mouse.up();
+  const cameraAfterPivotOrbit = await saveLiveCamera(canvasBox);
+  if (JSON.stringify(cameraAfterPivotOrbit.target) === JSON.stringify(cameraBeforePivotOrbit.target)) {
+    throw new Error("Orbit did not retarget to the grabbed model point.");
+  }
   const cameraBeforeControlOrbit = await saveLiveCamera(canvasBox);
   await page.keyboard.down("Control");
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);

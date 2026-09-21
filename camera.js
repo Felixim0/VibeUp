@@ -63,6 +63,22 @@ export class OrbitCamera {
     this.pitch = ((this.pitch + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   }
 
+  orbitAround(target) {
+    if (!Array.isArray(target) || target.length !== 3 || !target.every(Number.isFinite)) {
+      return;
+    }
+    const position = this.getPosition();
+    const offset = subtract3(position, target);
+    const distance = Math.hypot(...offset);
+    if (distance < 0.000001) {
+      return;
+    }
+    this.target = Array.from(target);
+    this.distance = distance;
+    this.yaw = Math.atan2(offset[1], offset[0]);
+    this.pitch = Math.asin(Math.max(-1, Math.min(1, offset[2] / distance)));
+  }
+
   getUp() {
     const horizontal = Math.abs(Math.cos(this.pitch));
     const worldUp = Math.cos(this.pitch) >= 0 ? [0, 0, 1] : [0, 0, -1];

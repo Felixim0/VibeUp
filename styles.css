@@ -101,7 +101,7 @@ button {
 }
 
 .app-shell.palette-detached {
-  grid-template-rows: 42px 32px 42px minmax(0, 1fr) 36px;
+  grid-template-rows: 42px 32px minmax(0, 1fr) 36px;
 }
 
 .titlebar {
@@ -221,17 +221,8 @@ button {
   display: none !important;
 }
 
-.ribbon.detached .ribbon-group {
-  display: none;
-}
-
 .ribbon.detached {
-  min-height: 34px;
-}
-
-.ribbon.detached .ribbon-utility {
-  width: 100%;
-  justify-content: flex-end;
+  display: none;
 }
 
 .ribbon-utility {
@@ -260,10 +251,9 @@ button {
 .floating-palette {
   position: fixed;
   z-index: 20;
-  width: 336px;
-  min-width: 238px;
-  min-height: 175px;
-  max-height: calc(100vh - 20px);
+  width: 280px;
+  min-width: 128px;
+  min-height: 112px;
   overflow: hidden;
   resize: both;
   border: 1px solid #9db3b9;
@@ -313,7 +303,7 @@ button {
 
 .floating-palette-tools {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   max-height: calc(100vh - 57px);
   overflow: auto;
@@ -341,7 +331,7 @@ button {
 
 .floating-palette-group-tools {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(46px, 1fr));
   gap: 3px;
 }
 
