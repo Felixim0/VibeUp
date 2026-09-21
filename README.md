@@ -13,13 +13,14 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 ## Core workflow
 
 - **Select is component-aware.** Click once to select a face, edge, or line; double-click a face to include its boundary edges; triple-click to select connected touching/intersecting faces and lines. Dragging a selected object still moves it on the clicked face plane.
+- **Directional box selection.** Drag empty space left-to-right to select projected items that touch the dotted box; drag right-to-left to select only projected items fully contained by it. `Ctrl/Cmd+A` selects all visible model items, or all items inside the current group.
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Non-Select cursor art sits down-left of the exact snap point so it never hides the inference marker.
 - Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
 - Locked objects remain selectable so they can be unlocked from Entity Info; all edit operations remain blocked until unlocked.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
 - **Detachable tools.** Use **Detach tools** to open a draggable, resizable floating palette. Its tool groups have the same names as the ribbon menus and are separated by section rules. It can be narrowed substantially or positioned partly offscreen, while the main ribbon disappears to preserve workspace height.
-- The detachable palette is height-bounded to remain reachable on short browser windows.
+- The detachable palette can remain partly offscreen when deliberately positioned there.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
 - **Inference locking.** While drawing, hold `Control` when hovering an inferred edge or face axis to lock the point to that straight line. Release `Control` to unlock.
 - **Grab-point orbit and rotation.** Orbit pivots around the model point where orbit begins. Rotate uses the exact grabbed face or edge point as its rotation pivot, then uses a second point as the reference ray. `Escape` cancels.
@@ -64,7 +65,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Perspective or parallel projection.
 - Grid and mesh-edge toggles, with thicker red, green, and blue world axes, restrained depth-tested committed lines, and high-visibility live drawing previews. Face back-sides are shown in blue to make reversed winding visible.
 - Wheel zoom slows proportionally as the camera approaches the model for fine positioning.
-- Orbit is continuous over top and bottom views, with a pole-safe camera basis so it does not block or snap when passing above a model.
+- Orbit keeps the world Z axis upright and stops just short of top and bottom poles, preventing disorienting camera roll.
 - Light theme by default plus a dark-theme option.
 - Custom workspace, grid, edge, selection colours, and edge thickness.
 - A muted gold selection accent by default, configurable from Appearance.
@@ -80,6 +81,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 | `T`, `D`, `B`, `E` | Tape, Dimension, Paint, Eraser |
 | `O`, `H`, `Z`, `Shift+Z` | Orbit, Pan, Zoom, Zoom Extents |
 | `Control` + Orbit drag | Pan the camera in the view plane |
+| `Ctrl/Cmd+A` | Select all visible items in the current model or group |
 | `Control` while drawing | Lock straight-line inference |
 | `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` | Undo/redo model changes without moving the current camera |
 | `Ctrl/Cmd+S`, `Ctrl/Cmd+O` | Save, Open |

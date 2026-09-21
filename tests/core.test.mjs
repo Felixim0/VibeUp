@@ -323,30 +323,27 @@ test("zoom becomes less sensitive near the model", () => {
   assert.ok(close.distance > 0);
 });
 
-test("orbit moves continuously through the top pole", () => {
+test("orbit clamps at the top pole to keep the camera upright", () => {
   const camera = new OrbitCamera();
   camera.pitch = Math.PI / 2 - 0.01;
   camera.orbit(0, -10);
-  assert.ok(camera.pitch > Math.PI / 2);
+  assert.ok(camera.pitch < Math.PI / 2);
+  assert.ok(camera.pitch > Math.PI / 2 - 0.001);
   const position = camera.getPosition();
   const up = camera.getUp();
   assert.ok(position.every(Number.isFinite));
-  assert.ok(up.every(Number.isFinite));
-  assert.ok(Math.hypot(...up) > 0.99);
-  camera.orbit(0, 30);
-  assert.ok(camera.pitch < Math.PI / 2);
+  assert.deepEqual(up, [0, 0, 1]);
 });
 
-test("orbit moves continuously through the bottom pole", () => {
+test("orbit clamps at the bottom pole to keep the camera upright", () => {
   const camera = new OrbitCamera();
   camera.pitch = -Math.PI / 2 + 0.01;
   camera.orbit(0, 10);
-  assert.ok(camera.pitch < -Math.PI / 2);
+  assert.ok(camera.pitch > -Math.PI / 2);
+  assert.ok(camera.pitch < -Math.PI / 2 + 0.001);
   const { projection, view } = camera.getMatrices(1.5);
   assert.ok(projection.every(Number.isFinite));
   assert.ok(view.every(Number.isFinite));
-  camera.orbit(0, -30);
-  assert.ok(camera.pitch > -Math.PI / 2);
 });
 
 test("camera pan remains usable at both poles", () => {
@@ -417,6 +414,15 @@ test("group preserves children and basic entity lookup", () => {
   assert.equal(group.children.length, 2);
   assert.equal(getEntity(project, first.id).parentId, group.id);
   assert.equal(project.roots.length, 1);
+});
+
+test("a group exposes its direct members for context selection", () => {
+  const project = createEmptyProject();
+  const first = addEntity(project, createBoxEntity(10, 10, 10, "First"));
+  const second = addEntity(project, createBoxEntity(10, 10, 10, "Second"));
+  const group = makeGroup(project, [first.id, second.id]);
+  assert.ok(group);
+  assert.deepEqual(group.children, [first.id, second.id]);
 });
 
 test("explode group preserves child world transform", () => {

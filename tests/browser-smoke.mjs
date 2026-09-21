@@ -177,6 +177,11 @@ try {
   if (modelState.outlinerRows < 2 || !modelState.selected?.includes("Box")) {
     throw new Error(`Box interaction failed: ${JSON.stringify(modelState)}`);
   }
+  await page.keyboard.press("Control+A");
+  const selectAllStatus = await page.locator("#selection-status").textContent();
+  if (!selectAllStatus?.includes("selected")) {
+    throw new Error(`Ctrl+A did not select the current model context: ${selectAllStatus}`);
+  }
   const undoCanvasBox = await page.locator("#viewport").boundingBox();
   if (!undoCanvasBox) {
     throw new Error("Viewport has no layout box for undo verification.");
@@ -207,6 +212,8 @@ try {
     throw new Error("Redo changed the active camera.");
   }
   await page.getByTitle("Iso view").click();
+  await page.getByRole("tab", { name: "Outliner", exact: true }).click();
+  await page.locator(".outliner-row").first().click();
   await page.getByText("Entity", { exact: true }).click();
   await page.locator("#entity-info input[type='checkbox']").nth(1).check();
   const lockedEntityStatus = await page.locator("#entity-info").textContent();
@@ -224,6 +231,35 @@ try {
   const canvasBox = await canvas.boundingBox();
   if (!canvasBox) {
     throw new Error("Viewport has no layout box.");
+  }
+  const marqueeStart = { x: canvasBox.width * 0.05, y: canvasBox.height * 0.18 };
+  const marqueeEnd = { x: canvasBox.width * 0.95, y: canvasBox.height * 0.82 };
+  await page.mouse.move(canvasBox.x + marqueeStart.x, canvasBox.y + marqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + marqueeEnd.x, canvasBox.y + marqueeEnd.y, { steps: 4 });
+  if (await page.locator("#selection-marquee").isHidden()) {
+    throw new Error("Left-to-right marquee did not become visible while dragging.");
+  }
+  const touchingMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("crossing"));
+  if (!touchingMarquee) {
+    throw new Error("Left-to-right marquee did not use touching selection styling.");
+  }
+  await page.mouse.up();
+  const marqueeStatus = await page.locator("#status-message").textContent();
+  if (!marqueeStatus?.includes("touching entities selected")) {
+    throw new Error(`Left-to-right marquee did not select touching entities: ${marqueeStatus}`);
+  }
+  await page.mouse.move(canvasBox.x + marqueeEnd.x, canvasBox.y + marqueeEnd.y);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + marqueeStart.x, canvasBox.y + marqueeStart.y, { steps: 4 });
+  const containedMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("contained"));
+  if (!containedMarquee) {
+    throw new Error("Right-to-left marquee did not use contained selection styling.");
+  }
+  await page.mouse.up();
+  const containedStatus = await page.locator("#status-message").textContent();
+  if (!containedStatus?.includes("contained entities selected") && !containedStatus?.includes("No entities matched")) {
+    throw new Error(`Right-to-left marquee did not complete containment selection: ${containedStatus}`);
   }
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
   const selectionState = await page.locator("#selection-status").textContent();

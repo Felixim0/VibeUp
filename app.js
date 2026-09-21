@@ -96,7 +96,7 @@ const TOOL_CURSORS = {
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Click a face, edge, or entity to select it. Delete removes the selected component; Shift-click adds or removes entities from the selection.",
+  select: "Click a face, edge, or line to select it. Drag empty space left-to-right to select touching items or right-to-left to select contained items. Ctrl/Cmd+A selects the current group or model.",
   line: "Click a start point, then click an end point. Type a length in Measurements for an exact line.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
@@ -153,6 +153,7 @@ const elements = {
   floatingPalette: document.querySelector("#floating-palette"),
   floatingPaletteTitle: document.querySelector("#floating-palette-title"),
   floatingPaletteTools: document.querySelector("#floating-palette-tools"),
+  selectionMarquee: document.querySelector("#selection-marquee"),
   snapIndicator: document.querySelector("#snap-indicator")
 };
 
@@ -495,6 +496,37 @@ const setSelection = (ids, mode = "replace") => {
 
 const clearSelection = () => setSelection([]);
 
+const selectAllInContext = () => {
+  const focus = currentSelection()[0] ?? null;
+  let ids = app.project.roots;
+  let label = "the model";
+  if (focus?.kind === "group") {
+    ids = focus.children;
+    label = focus.name;
+  } else if (focus?.parentId) {
+    const parent = getEntity(app.project, focus.parentId);
+    if (parent?.kind === "group") {
+      ids = parent.children;
+      label = parent.name;
+    }
+  }
+  const visibleIds = [];
+  const visit = (id) => {
+    const entity = getEntity(app.project, id);
+    if (!entity || !isEntityVisible(app.project, entity)) {
+      return;
+    }
+    if (entity.kind === "group") {
+      entity.children.forEach(visit);
+      return;
+    }
+    visibleIds.push(entity.id);
+  };
+  ids.forEach(visit);
+  setSelection(visibleIds);
+  setStatus(`${visibleIds.length} ${visibleIds.length === 1 ? "item" : "items"} selected in ${label}.`);
+};
+
 const getPointer = (event) => {
   const bounds = elements.canvas.getBoundingClientRect();
   return {
@@ -503,6 +535,89 @@ const getPointer = (event) => {
     cssX: event.clientX - bounds.left,
     cssY: event.clientY - bounds.top
   };
+};
+
+const cssPointer = (event) => {
+  const bounds = elements.canvas.getBoundingClientRect();
+  return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+};
+
+const marqueeBounds = (start, current) => ({
+  left: Math.min(start.x, current.x),
+  right: Math.max(start.x, current.x),
+  top: Math.min(start.y, current.y),
+  bottom: Math.max(start.y, current.y)
+});
+
+const updateSelectionMarquee = (start, current) => {
+  const bounds = marqueeBounds(start, current);
+  const marquee = elements.selectionMarquee;
+  marquee.hidden = false;
+  marquee.classList.toggle("crossing", current.x >= start.x);
+  marquee.classList.toggle("contained", current.x < start.x);
+  marquee.style.left = `${bounds.left}px`;
+  marquee.style.top = `${bounds.top}px`;
+  marquee.style.width = `${Math.max(1, bounds.right - bounds.left)}px`;
+  marquee.style.height = `${Math.max(1, bounds.bottom - bounds.top)}px`;
+};
+
+const hideSelectionMarquee = () => {
+  elements.selectionMarquee.hidden = true;
+  elements.selectionMarquee.classList.remove("crossing", "contained");
+};
+
+const entityProjectedBounds = (entity) => {
+  const bounds = entityBounds(app.project, entity);
+  if (!bounds || !app.renderMatrices) {
+    return null;
+  }
+  const corners = [];
+  for (const x of [bounds.min[0], bounds.max[0]]) {
+    for (const y of [bounds.min[1], bounds.max[1]]) {
+      for (const z of [bounds.min[2], bounds.max[2]]) {
+        const projected = projectPoint([x, y, z], app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+        if (projected && projected[2] >= -1 && projected[2] <= 1) {
+          corners.push([projected[0] / app.renderer.pixelRatio, projected[1] / app.renderer.pixelRatio]);
+        }
+      }
+    }
+  }
+  if (corners.length === 0) {
+    return null;
+  }
+  return {
+    left: Math.min(...corners.map(([x]) => x)),
+    right: Math.max(...corners.map(([x]) => x)),
+    top: Math.min(...corners.map(([, y]) => y)),
+    bottom: Math.max(...corners.map(([, y]) => y))
+  };
+};
+
+const rectsOverlap = (first, second) => (
+  first.left <= second.right && first.right >= second.left && first.top <= second.bottom && first.bottom >= second.top
+);
+
+const marqueeSelect = (start, current, mode = "replace") => {
+  const bounds = marqueeBounds(start, current);
+  const touching = current.x >= start.x;
+  const ids = [];
+  for (const entity of app.project.entities) {
+    if (entity.kind === "group" || !isEntityVisible(app.project, entity)) {
+      continue;
+    }
+    const projected = entityProjectedBounds(entity);
+    if (!projected) {
+      continue;
+    }
+    const selected = touching
+      ? rectsOverlap(bounds, projected)
+      : projected.left >= bounds.left && projected.right <= bounds.right && projected.top >= bounds.top && projected.bottom <= bounds.bottom;
+    if (selected) {
+      ids.push(entity.id);
+    }
+  }
+  setSelection(ids, mode);
+  setStatus(ids.length === 0 ? "No entities matched the selection box." : `${ids.length} ${touching ? "touching" : "contained"} entities selected.`);
 };
 
 const getRay = (event) => {
@@ -1013,6 +1128,9 @@ const componentSegments = (component) => {
   if (component.type === "face") {
     return component.edges;
   }
+  if (component.type === "edge") {
+    return [{ start: component.start, end: component.end }];
+  }
   const segments = [];
   for (let index = 0; index < component.points.length - 3; index += 3) {
     segments.push({
@@ -1086,7 +1204,17 @@ const connectedComponents = (seed) => {
     }
   }
   const selected = [seed];
-  const remaining = components.filter((component, index) => index > 0 && !(component.entityId === seed.entityId && component.type === seed.type));
+  const componentKey = (component) => {
+    if (component.type === "face") {
+      return `${component.entityId}:face:${component.triangleIndices.join(",")}`;
+    }
+    if (component.type === "edge") {
+      return `${component.entityId}:edge:${meshEdgeKey(component.start, component.end)}`;
+    }
+    return `${component.entityId}:line`;
+  };
+  const seedKey = componentKey(seed);
+  const remaining = components.filter((component, index) => index > 0 && componentKey(component) !== seedKey);
   for (let index = 0; index < selected.length; index += 1) {
     for (let candidateIndex = remaining.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
       if (componentsTouch(selected[index], remaining[candidateIndex])) {
@@ -1099,7 +1227,7 @@ const connectedComponents = (seed) => {
 };
 
 const selectComponentByClickCount = (event, hit, clickCount = 1) => {
-  const seed = componentFromHit(event, hit, clickCount === 2);
+  const seed = componentFromHit(event, hit, clickCount >= 2);
   if (!seed) {
     setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
     return;
@@ -1647,6 +1775,10 @@ const updateOutlinerPanel = () => {
 const updateSelectionStatus = () => {
   const entities = currentSelection();
   const component = app.componentSelection;
+  if (component?.type === "multi") {
+    elements.selectionStatus.textContent = `${component.components.length} connected components selected`;
+    return;
+  }
   const suffix = component?.type === "face" ? " face selected" : component?.type === "edge" ? " edge selected" : " selected";
   elements.selectionStatus.textContent = entities.length === 0 ? "No selection" : entities.length === 1 ? `${entities[0].name}${suffix}` : `${entities.length} selected`;
 };
@@ -3638,16 +3770,24 @@ const handlePointerDown = (event) => {
   if (tool === "select") {
     const hit = pickEntity(event);
     const meshEdge = pickVisibleMeshEdge(event, hit?.entity.kind === "mesh" ? hit.entity : null);
-    const clickCount = 1;
+    const pointer = getPointer(event);
+    const clickCount = selectionClickCount(pointer);
     if (!hit) {
       if (meshEdge) {
-        setComponentSelection({ type: "edge", entityId: meshEdge.entity.id, start: meshEdge.start, end: meshEdge.end, point: meshEdge.point });
-        setStatus("Edge selected.");
+        const edgeHit = { entity: meshEdge.entity, point: meshEdge.point, triangleIndex: 0, coarse: false };
+        selectComponentByClickCount(event, edgeHit, clickCount);
         return;
       }
-      if (!event.shiftKey) {
-        clearSelection();
-      }
+      app.selectionClick = null;
+      app.interaction = {
+        kind: "marquee",
+        pointerId: event.pointerId,
+        startPointer: pointer,
+        startCssPointer: cssPointer(event),
+        currentCssPointer: cssPointer(event),
+        mode: event.shiftKey ? "add" : "replace"
+      };
+      elements.canvas.setPointerCapture(event.pointerId);
       return;
     }
     if (clickCount > 1) {
@@ -3655,6 +3795,10 @@ const handlePointerDown = (event) => {
       return;
     }
     if (meshEdge && meshEdge.entity.id === hit.entity.id) {
+      if (clickCount > 1) {
+        selectComponentByClickCount(event, hit, clickCount);
+        return;
+      }
       setComponentSelection({ type: "edge", entityId: meshEdge.entity.id, start: meshEdge.start, end: meshEdge.end, point: meshEdge.point });
       setStatus("Edge selected.");
       return;
@@ -3663,7 +3807,9 @@ const handlePointerDown = (event) => {
       selectComponentByClickCount(event, hit, clickCount);
       return;
     }
-    beginDirectMove(event, hit);
+    if (beginDirectMove(event, hit) && app.interaction) {
+      app.interaction.clickCount = clickCount;
+    }
     return;
   }
   if (drawingTools.has(tool)) {
@@ -3777,6 +3923,13 @@ const handlePointerMove = (event) => {
     requestRender();
     return;
   }
+  if (interaction.kind === "marquee") {
+    interaction.currentCssPointer = cssPointer(event);
+    if (pointerMovement(pointer, interaction.startPointer) > 2) {
+      updateSelectionMarquee(interaction.startCssPointer, interaction.currentCssPointer);
+    }
+    return;
+  }
   if (interaction.kind === "scale") {
     const factor = Math.max(0.01, Math.exp((pointer.x - interaction.startPointer.x) * 0.01));
     for (const id of interaction.entities) {
@@ -3832,6 +3985,16 @@ const handlePointerUp = (event) => {
   if (interaction.kind === "rotate-guide") {
     return;
   }
+  if (interaction.kind === "marquee") {
+    app.interaction = null;
+    hideSelectionMarquee();
+    if (pointerMovement(getPointer(event), interaction.startPointer) > 2) {
+      marqueeSelect(interaction.startCssPointer, cssPointer(event), interaction.mode);
+    } else if (!event.shiftKey) {
+      clearSelection();
+    }
+    return;
+  }
   if (interaction.kind === "direct-move") {
     if (snapshotDiffers(interaction.before) && commitSnapshot("Move selection", interaction.before)) {
       app.selectionClick = null;
@@ -3839,7 +4002,7 @@ const handlePointerUp = (event) => {
     } else {
       const hit = pickEntity(event);
       if (hit && !event.shiftKey) {
-        selectComponentByClickCount(event, hit, selectionClickCount(getPointer(event)));
+        selectComponentByClickCount(event, hit, interaction.clickCount ?? 1);
       }
       requestRender();
     }
@@ -3906,6 +4069,7 @@ const cancelActiveOperation = () => {
   app.hoverPoint = null;
   app.inference = null;
   app.snap = null;
+  hideSelectionMarquee();
   setTool("select");
   setStatus("Operation cancelled.");
 };
@@ -4201,6 +4365,11 @@ const handleKeyboard = (event) => {
     if (key === "n") {
       event.preventDefault();
       newProject();
+      return;
+    }
+    if (key === "a" && !editingText) {
+      event.preventDefault();
+      selectAllInContext();
       return;
     }
     if (key === "d") {

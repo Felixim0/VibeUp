@@ -10,6 +10,8 @@ import {
 } from "./math.js";
 
 const DEGREE = Math.PI / 180;
+const POLE_EPSILON = 0.0001;
+const clampPitch = (pitch) => Math.max(-Math.PI / 2 + POLE_EPSILON, Math.min(Math.PI / 2 - POLE_EPSILON, pitch));
 
 export class OrbitCamera {
   constructor() {
@@ -58,9 +60,8 @@ export class OrbitCamera {
 
   orbit(deltaX, deltaY) {
     this.yaw -= deltaX * 0.008;
-    this.pitch -= deltaY * 0.008;
+    this.pitch = clampPitch(this.pitch - deltaY * 0.008);
     this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    this.pitch = ((this.pitch + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   }
 
   orbitAround(target) {
@@ -76,21 +77,20 @@ export class OrbitCamera {
     this.target = Array.from(target);
     this.distance = distance;
     this.yaw = Math.atan2(offset[1], offset[0]);
-    this.pitch = Math.asin(Math.max(-1, Math.min(1, offset[2] / distance)));
+    this.pitch = clampPitch(Math.asin(Math.max(-1, Math.min(1, offset[2] / distance))));
   }
 
   getUp() {
-    const horizontal = Math.abs(Math.cos(this.pitch));
-    const worldUp = Math.cos(this.pitch) >= 0 ? [0, 0, 1] : [0, 0, -1];
-    const poleTangent = [-Math.sin(this.yaw), Math.cos(this.yaw), 0];
-    // Blend toward a horizontal up vector at the poles so lookAt never receives
-    // an up vector parallel to the viewing direction.
-    return normalize3(add3(scale3(worldUp, horizontal), scale3(poleTangent, 1 - horizontal)));
+    // Keep the viewport upright around the world Z axis, matching SketchUp's no-roll orbit.
+    return [0, 0, 1];
   }
 
   pan(deltaX, deltaY, viewportHeight) {
     const direction = this.getDirection();
-    const right = normalize3(cross3(direction, this.getUp()));
+    let right = normalize3(cross3(direction, this.getUp()));
+    if (Math.hypot(...right) < 0.000001) {
+      right = [-Math.sin(this.yaw), Math.cos(this.yaw), 0];
+    }
     const up = normalize3(cross3(right, direction));
     const distancePerPixel = (this.distance * 0.82) / Math.max(viewportHeight, 1);
     this.target = add3(
@@ -154,6 +154,7 @@ export class OrbitCamera {
     this.target = Array.from(data.target);
     this.yaw = Number.isFinite(data.yaw) ? data.yaw : this.yaw;
     this.pitch = Number.isFinite(data.pitch) ? data.pitch : this.pitch;
+    this.pitch = clampPitch(this.pitch);
     this.distance = Number.isFinite(data.distance) ? data.distance : this.distance;
     this.projectionType = data.projectionType === "parallel" ? "parallel" : "perspective";
   }

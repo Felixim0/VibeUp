@@ -424,6 +424,24 @@ button {
   background: #e6fbfd;
 }
 
+.selection-marquee {
+  position: absolute;
+  z-index: 6;
+  border: 1px dashed #158779;
+  background: rgb(79 205 184 / 12%);
+  pointer-events: none;
+}
+
+.selection-marquee.crossing {
+  border-color: #148a78;
+  background: rgb(80 205 184 / 16%);
+}
+
+.selection-marquee.contained {
+  border-color: #4e78c7;
+  background: rgb(78 120 199 / 12%);
+}
+
 #viewport {
   display: block;
   width: 100%;
