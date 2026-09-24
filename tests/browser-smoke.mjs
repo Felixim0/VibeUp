@@ -276,8 +276,8 @@ try {
   }
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
   const tripleClickStatus = await page.locator("#status-message").textContent();
-  if (!tripleClickStatus?.includes("touching components selected")) {
-    throw new Error(`Triple-click did not select connected geometry: ${tripleClickStatus}`);
+  if (!tripleClickStatus?.includes("Entire model selected")) {
+    throw new Error(`Triple-click did not select the entire model: ${tripleClickStatus}`);
   }
   await page.waitForTimeout(550);
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });

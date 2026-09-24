@@ -19,6 +19,7 @@ import {
   faceProfileHoles,
   getEntity,
   getMeshFaceRegion,
+  indentMeshFaceWithProfile,
   explodeGroup,
   makeGroup,
   moveMeshFace,
@@ -30,7 +31,8 @@ import {
   reverseMeshFaces,
   removeMeshEdgeFaces,
   removeMeshFaces,
-  rotateEntityAroundAxis
+  rotateEntityAroundAxis,
+  splitMeshFaceByLine
 } from "../geometry.js";
 import { add3, dot3, mat4FromTransform, mat4Identity, mat4Invert, mat4Multiply, mat4RotationAroundPoint, normalize3, scale3, subtract3, transformPoint } from "../math.js";
 import { createBinaryStl, parseStl } from "../stl.js";
@@ -276,6 +278,46 @@ test("Push/Pull keeps a nested profile as an indented box-face opening", () => {
   assert.equal(report.boundaryEdgeCount, 0);
   assert.equal(report.nonManifoldEdgeCount, 0);
   assert.equal(entityBounds(project, box).max[2], 60);
+});
+
+test("a boundary-to-boundary line splits a box face into independently selectable and extrudable regions", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const face = getMeshFaceRegion(project, box, 2);
+  assert.equal(splitMeshFaceByLine(project, box, face, [0, -50, 40], [0, 50, 40]), true);
+  assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
+  const halves = [];
+  for (let index = 0; index < box.indices.length / 3; index += 1) {
+    const region = getMeshFaceRegion(project, box, index);
+    if (region.normal[2] > 0.9 && !halves.some((existing) => existing.triangleIndices[0] === region.triangleIndices[0])) halves.push(region);
+  }
+  assert.equal(halves.length, 2);
+  extrudeMeshFaceWithProfileHoles(project, box, halves[0], [], 12);
+  assert.equal(entityBounds(project, box).max[2], 52);
+});
+
+test("a nested drawn face can indent its host without moving the outer face", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const profile = addEntity(project, createCircleEntity([0, 0, 40], 15, 18, "Cut", [0, 0, 1]));
+  const face = getMeshFaceRegion(project, box, 2);
+  indentMeshFaceWithProfile(project, box, face, faceProfileHoles(project, box, face)[0], -10);
+  assert.equal(entityBounds(project, box).max[2], 40);
+  assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
+  assert.ok(profile);
+});
+
+test("camera rotation and pan sensitivity survive serialization", () => {
+  const camera = new OrbitCamera();
+  camera.rotateSensitivity = 2;
+  camera.moveSensitivity = 0.5;
+  const restored = new OrbitCamera();
+  restored.restore(camera.serialize());
+  const baseline = new OrbitCamera();
+  restored.orbit(10, 0);
+  baseline.orbit(10, 0);
+  assert.ok(Math.abs(restored.yaw - baseline.yaw) > 0.01);
+  assert.equal(restored.moveSensitivity, 0.5);
 });
 
 test("deleting a selected mesh face preserves the remaining faces", () => {

@@ -15,10 +15,12 @@ import {
   edgeIndicesForMesh,
   extrudeMeshFaceWithProfileHoles,
   faceProfileHoles,
+  indentMeshFaceWithProfile,
   getMeshFaceRegion,
   createCylinderEntity,
   createDemoProject,
   createEdgeEntity,
+  createMeshEntity,
   createEmptyProject,
   createPolygonEntity,
   createRectangleEntity,
@@ -45,6 +47,7 @@ import {
   removeMeshFaces,
   reverseMeshFaces,
   rotateEntityAroundAxis,
+  splitMeshFaceByLine,
   sweepProfile
 } from "./geometry.js";
 import {
@@ -96,8 +99,8 @@ const TOOL_CURSORS = {
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Click a face, edge, or line to select it. Drag empty space left-to-right to select touching items or right-to-left to select contained items. Ctrl/Cmd+A selects the current group or model.",
-  line: "Click a start point, then click an end point. Type a length in Measurements for an exact line.",
+  select: "Click a face, edge, or line; triple-click for the entire model. Drag left-to-right for touching geometry, right-to-left for contained geometry. Ctrl/Cmd+A selects the current group or model.",
+  line: "Click a start and end point. Shift locks the starting plane (green preview). A line across a face splits it. Measurements accepts an exact length.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
   polygon: "Click the centre, then the radius. Measurements accepts radius, sides.",
@@ -108,7 +111,7 @@ const TOOL_HINTS = {
   move: "Select entities, then drag on the ground plane. Measurements accepts X, Y, Z translation.",
   rotate: "Click the exact face or edge point to use as the pivot, then set a reference point. Move the pointer to preview the rotation; click to apply.",
   scale: "Select entities, then drag left or right to scale uniformly. Measurements accepts one factor or X, Y, Z.",
-  pushpull: "Click a planar face, move in the face-normal direction to preview the extrusion, then click again to apply. Nested profiles become holes. Measurements accepts an exact height.",
+  pushpull: "Click a face, move to preview, then click to apply; click another face or line to match its level. Push a closed cut into a host face for a recess. Measurements accepts an exact height.",
   offset: "Select a planar face, then drag or enter an exact offset distance in Measurements.",
   followme: "Select a planar face, then drag a path or enter an X, Y, Z sweep vector in Measurements.",
   tape: "Click two points to create a tape-measure annotation in millimetres.",
@@ -183,6 +186,7 @@ const app = {
   paletteOffset: { x: 26, y: 148 },
   selectionClick: null,
   snap: null,
+  clipboard: null,
   inference: null,
   preferences: {
     onboardingDismissed: false
@@ -597,6 +601,51 @@ const rectsOverlap = (first, second) => (
   first.left <= second.right && first.right >= second.left && first.top <= second.bottom && first.bottom >= second.top
 );
 
+const projectedGeometryTouches = (entity, bounds, contained) => {
+  const project = (point) => {
+    const screen = projectPoint(point, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+    return screen && screen[2] >= -1 && screen[2] <= 1 ? [screen[0] / app.renderer.pixelRatio, screen[1] / app.renderer.pixelRatio] : null;
+  };
+  const inside = (point) => point[0] >= bounds.left && point[0] <= bounds.right && point[1] >= bounds.top && point[1] <= bounds.bottom;
+  const segmentTouches = (first, second) => {
+    if (inside(first) || inside(second)) {
+      return true;
+    }
+    const crosses = (a, b, c, d) => {
+      const denominator = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+      if (Math.abs(denominator) < 0.000001) return false;
+      const u = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / denominator;
+      const v = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / denominator;
+      return u >= 0 && u <= 1 && v >= 0 && v <= 1;
+    };
+    return [
+      [[bounds.left, bounds.top], [bounds.right, bounds.top]],
+      [[bounds.right, bounds.top], [bounds.right, bounds.bottom]],
+      [[bounds.right, bounds.bottom], [bounds.left, bounds.bottom]],
+      [[bounds.left, bounds.bottom], [bounds.left, bounds.top]]
+    ].some(([a, b]) => crosses(first, second, a, b));
+  };
+  const world = entity.kind === "mesh" ? meshWorldVertices(app.project, entity) : lineWorldPoints(app.project, entity);
+  const projected = [];
+  for (let index = 0; index < world.length; index += 3) {
+    projected.push(project(world.slice(index, index + 3)));
+  }
+  if (contained) return projected.length > 0 && projected.every((point) => point && inside(point));
+  if (entity.kind !== "mesh") {
+    return projected.some((point, index) => index > 0 && point && projected[index - 1] && segmentTouches(point, projected[index - 1]));
+  }
+  for (let index = 0; index < entity.indices.length; index += 3) {
+    const triangle = entity.indices.slice(index, index + 3).map((vertex) => projected[vertex]);
+    if (triangle.some((point) => !point)) continue;
+    if (triangle.some(inside) || triangle.some((point, vertex) => segmentTouches(point, triangle[(vertex + 1) % 3]))) return true;
+    const centre = [(bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2];
+    const sign = (a, b, c) => (a[0] - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (a[1] - c[1]);
+    const sides = triangle.map((point, vertex) => sign(centre, point, triangle[(vertex + 1) % 3]));
+    if (!sides.some((value) => value < 0) || !sides.some((value) => value > 0)) return true;
+  }
+  return false;
+};
+
 const marqueeSelect = (start, current, mode = "replace") => {
   const bounds = marqueeBounds(start, current);
   const touching = current.x >= start.x;
@@ -609,9 +658,7 @@ const marqueeSelect = (start, current, mode = "replace") => {
     if (!projected) {
       continue;
     }
-    const selected = touching
-      ? rectsOverlap(bounds, projected)
-      : projected.left >= bounds.left && projected.right <= bounds.right && projected.top >= bounds.top && projected.bottom <= bounds.bottom;
+    const selected = rectsOverlap(bounds, projected) && projectedGeometryTouches(entity, bounds, !touching);
     if (selected) {
       ids.push(entity.id);
     }
@@ -726,8 +773,9 @@ const closestSnap = (rawPoint, surface, options = {}) => {
     if (Math.abs(dot3(subtract3(point, surface.point), surface.normal)) > tolerance * 0.05) {
       return;
     }
-    if (distance <= tolerance && (!best || distance < best.distance)) {
-      best = { point, kind, label, distance, line, surface: surfaceForPoint(point, surface) };
+    const priority = ["vertex", "endpoint", "midpoint"].includes(kind) ? 0.7 : 1;
+    if (distance <= tolerance && (!best || distance * priority < best.distance * best.priority)) {
+      best = { point, kind, label, distance, priority, line, surface: surfaceForPoint(point, surface) };
     }
   };
 
@@ -794,6 +842,7 @@ const updateSnapIndicator = () => {
   }
   elements.snapIndicator.hidden = false;
   elements.snapIndicator.classList.toggle("inferred", snap.kind === "inference");
+  elements.snapIndicator.classList.toggle("vertex-snap", ["vertex", "endpoint", "midpoint"].includes(snap.kind));
   elements.snapIndicator.style.left = `${projected[0] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.style.top = `${projected[1] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.title = snap.label;
@@ -958,7 +1007,7 @@ const pickMeshEdge = (event, meshHit) => {
   const vertices = meshWorldVertices(app.project, meshHit.entity);
   const threshold = 6 * app.renderer.pixelRatio;
   let closest = null;
-  const visibleEdges = edgeIndicesForMesh(meshHit.entity.vertices, meshHit.entity.indices);
+  const visibleEdges = edgeIndicesForMesh(meshHit.entity.vertices, meshHit.entity.indices, meshHit.entity.metadata?.seams);
   for (let index = 0; index < visibleEdges.length; index += 2) {
     const startIndex = visibleEdges[index] * 3;
     const endIndex = visibleEdges[index + 1] * 3;
@@ -1233,9 +1282,9 @@ const selectComponentByClickCount = (event, hit, clickCount = 1) => {
     return;
   }
   if (clickCount >= 3) {
-    const components = connectedComponents(seed);
-    setComponentSelection({ type: "multi", components });
-    setStatus(`${components.length} touching components selected.`);
+    const ids = app.project.entities.filter((entity) => entity.kind !== "group" && isEntityVisible(app.project, entity)).map((entity) => entity.id);
+    setSelection(ids);
+    setStatus(`Entire model selected (${ids.length} items).`);
     return;
   }
   if (seed.type === "line") {
@@ -1332,7 +1381,7 @@ const currentPreview = () => {
   const { tool, points } = app.pending;
   const hover = app.hoverPoint;
   if (tool === "line" || tool === "tape" || tool === "dimension" || tool === "followme") {
-    return { points: [...points[0], ...hover] };
+    return { points: [...points[0], ...hover], color: tool === "line" && app.linePlaneLocked ? [0.13, 0.83, 0.29, 1] : undefined };
   }
   if (tool === "rectangle") {
     const start = points[0];
@@ -2092,6 +2141,7 @@ const showHelp = () => {
     "Space Select, L Line, R Rectangle, C Circle, P Push/Pull, M Move, Q Rotate, S Scale, F Offset",
     "T Tape Measure, D Dimension, B Paint, E Eraser, O Orbit, H Pan, Z Zoom",
     "Ctrl+Z Undo, Ctrl+Shift+Z Redo, Ctrl+S Save, Ctrl+O Open, Delete Erase selection",
+    "Ctrl/Cmd+C Copy, Ctrl/Cmd+V Paste, triple-click Select entire model, Shift+Line Lock drawing plane",
     "Middle mouse pans; Alt-drag or right mouse orbits; mouse wheel zooms; Shift+Z fits the model"
   ]) {
     list.append(element("li", { text }));
@@ -2128,7 +2178,9 @@ const normalizeCamera = (raw, label = "Camera") => {
     yaw: raw.yaw,
     pitch: raw.pitch,
     distance: raw.distance,
-    projectionType: raw.projectionType === "parallel" ? "parallel" : "perspective"
+    projectionType: raw.projectionType === "parallel" ? "parallel" : "perspective",
+    rotateSensitivity: Number.isFinite(raw.rotateSensitivity) ? raw.rotateSensitivity : 1,
+    moveSensitivity: Number.isFinite(raw.moveSensitivity) ? raw.moveSensitivity : 1
   };
 };
 
@@ -2680,6 +2732,94 @@ const duplicateSelection = () => {
   }
 };
 
+const copySelection = () => {
+  const component = app.componentSelection;
+  const entity = component?.entityId ? getEntity(app.project, component.entityId) : null;
+  if (component?.type === "multi") {
+    setStatus("Select one face, edge, or model before copying.", "warning");
+    return;
+  }
+  if (entity && component.type === "face") {
+    const vertices = meshWorldVertices(app.project, entity);
+    const indices = [];
+    const points = [];
+    for (const triangle of component.triangleIndices) {
+      for (const index of entity.indices.slice(triangle * 3, triangle * 3 + 3)) {
+        indices.push(points.length / 3);
+        points.push(...vertices.slice(index * 3, index * 3 + 3));
+      }
+    }
+    app.clipboard = { kind: "component", entity: createMeshEntity({ name: `${entity.name} face`, vertices: points, indices, materialId: entity.materialId }) };
+  } else if (entity && component.type === "edge") {
+    app.clipboard = { kind: "component", entity: createEdgeEntity({ name: `${entity.name} edge`, points: [...component.start, ...component.end] }) };
+  } else {
+    const selected = currentSelection();
+    if (!selected.length) {
+      setStatus("Select a model, face, or line to copy.", "warning");
+      return;
+    }
+    const selectedIds = new Set(selected.map((item) => item.id));
+    const roots = selected.filter((item) => {
+      let parent = item.parentId ? getEntity(app.project, item.parentId) : null;
+      while (parent) {
+        if (selectedIds.has(parent.id)) return false;
+        parent = parent.parentId ? getEntity(app.project, parent.parentId) : null;
+      }
+      return true;
+    });
+    app.clipboard = { kind: "entities", entities: roots.map((item) => {
+      const descendants = [];
+      const visit = (entry) => {
+        descendants.push(structuredClone(entry));
+        for (const childId of entry.children ?? []) {
+          const child = getEntity(app.project, childId);
+          if (child) visit(child);
+        }
+      };
+      visit(item);
+      return descendants;
+    }) };
+  }
+  setStatus("Selection copied. Press Ctrl/Cmd+V to paste.");
+};
+
+const pasteSelection = () => {
+  if (!app.clipboard) {
+    setStatus("Copy a model, face, or line first.", "warning");
+    return;
+  }
+  const copies = mutate("Paste selection", () => {
+    const pasted = [];
+    const offset = [10, 10, 0];
+    if (app.clipboard.kind === "component") {
+      const clone = structuredClone(app.clipboard.entity);
+      clone.id = newId();
+      clone.transform.position = offset;
+      pasted.push(addEntity(app.project, clone));
+    } else {
+      for (const tree of app.clipboard.entities) {
+        const idMap = new Map(tree.map((entity) => [entity.id, newId()]));
+        for (const source of tree) {
+          const clone = structuredClone(source);
+          clone.id = idMap.get(source.id);
+          clone.name = `${source.name} copy`;
+          clone.parentId = idMap.get(source.parentId) ?? null;
+          if (clone.kind === "group") clone.children = [];
+          if (source === tree[0]) clone.transform.position = add3(clone.transform.position, offset);
+          addEntity(app.project, clone, clone.parentId);
+          if (source === tree[0]) pasted.push(clone);
+        }
+      }
+    }
+    app.renderer.invalidate();
+    return pasted;
+  });
+  if (copies) {
+    setSelection(copies.map((entity) => entity.id));
+    setStatus(`Pasted ${copies.length} item${copies.length === 1 ? "" : "s"}.`);
+  }
+};
+
 const groupSelection = () => {
   const entities = currentSelection();
   if (entities.length === 0) {
@@ -2845,7 +2985,21 @@ const createLine = (start, end) => {
   if (distance3(start, end) < 0.0001) {
     throw new Error("A line needs non-zero length.");
   }
-  return mutate("Draw line", () => addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] })));
+  return mutate("Draw line", () => {
+    for (const host of app.project.entities) {
+      if (host.kind !== "mesh" || host.locked || !isEntityVisible(app.project, host)) {
+        continue;
+      }
+      for (let triangle = 0; triangle < host.indices.length / 3; triangle += 1) {
+        const face = getMeshFaceRegion(app.project, host, triangle);
+        if (face && splitMeshFaceByLine(app.project, host, face, start, end)) {
+          app.renderer.invalidate(host.id);
+          return host;
+        }
+      }
+    }
+    return addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] }));
+  });
 };
 
 const currentCircleSegments = () => Math.max(3, Math.min(96, Math.round(app.project.settings.circleSegments)));
@@ -2934,6 +3088,28 @@ const applyPushPull = (height) => {
     if (!entity || entity.locked) {
       throw new Error("Select an unlocked face before using Push/Pull.");
     }
+    if (entity.metadata?.planar && height < 0) {
+      const host = app.project.entities.find((candidate) => {
+        if (candidate.id === entity.id || candidate.kind !== "mesh" || candidate.metadata?.planar || candidate.locked) return false;
+        for (let index = 0; index < candidate.indices.length / 3; index += 1) {
+          const face = getMeshFaceRegion(app.project, candidate, index);
+          if (faceProfileHoles(app.project, candidate, face).some((hole) => hole.entityId === entity.id)) return true;
+        }
+        return false;
+      });
+      if (host) return mutate("Indent face", () => {
+        for (let index = 0; index < host.indices.length / 3; index += 1) {
+          const face = getMeshFaceRegion(app.project, host, index);
+          const hole = faceProfileHoles(app.project, host, face).find((item) => item.entityId === entity.id);
+          if (hole) {
+            indentMeshFaceWithProfile(app.project, host, face, hole, height);
+            removeEntity(app.project, entity.id);
+            app.renderer.invalidate();
+            return;
+          }
+        }
+      });
+    }
     if (entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal) {
       return applyCirclePushPull(entity, height);
     }
@@ -2949,7 +3125,7 @@ const applyPushPull = (height) => {
     }
     return mutate("Push/Pull face", () => {
       const holes = faceProfileHoles(app.project, entity, component);
-      if (holes.length > 0) {
+      if (holes.length > 0 || entity.metadata?.seams?.length) {
         extrudeMeshFaceWithProfileHoles(app.project, entity, component, holes, height);
         for (const hole of holes) {
           removeEntity(app.project, hole.entityId);
@@ -2997,6 +3173,16 @@ const pushPullHeightForPointer = (interaction, pointer) => {
     }
   }
   return (interaction.startPointer.y - pointer.y) * (app.camera.distance / viewportHeight);
+};
+
+const pushPullHeightFromHit = (interaction, event) => {
+  const hit = pickEntity(event);
+  if (!hit?.point || hit.entity.id === interaction.entityId || hit.entity.id === interaction.hostIndent?.entityId) return null;
+  const normal = interaction.component.normal;
+  const distance = dot3(subtract3(hit.point, interaction.component.point), normal);
+  if (!Number.isFinite(distance) || Math.abs(distance) < 0.0001) return null;
+  if (hit.entity.kind === "edge" || hit.entity.kind === "mesh") return distance;
+  return null;
 };
 
 const restorePushPullPreview = (interaction) => {
@@ -3047,7 +3233,18 @@ const updatePushPullPreview = (interaction, height) => {
     if (!entity) {
       throw new Error("The selected face is no longer available.");
     }
-    if (interaction.specialCircle) {
+    if (interaction.hostIndent && height < 0) {
+      const host = getEntity(app.project, interaction.hostIndent.entityId);
+      const face = getMeshFaceRegion(app.project, host, interaction.hostIndent.triangleIndex);
+      const hole = faceProfileHoles(app.project, host, face).find((item) => item.entityId === entity.id);
+      if (!hole) throw new Error("The cut is no longer on the host face.");
+      indentMeshFaceWithProfile(app.project, host, face, hole, height);
+      removeEntity(app.project, entity.id);
+      app.selection = new Set([host.id]);
+      app.selectionOrder = [host.id];
+      app.componentSelection = null;
+      app.renderer.invalidate();
+    } else if (interaction.specialCircle && !interaction.hostIndent) {
       previewCirclePushPull(entity, interaction.component);
     } else if (entity.metadata?.planar) {
       const holes = nestedProfileHoles(app.project, entity);
@@ -3060,7 +3257,7 @@ const updatePushPullPreview = (interaction, height) => {
       app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
     } else {
       const holes = faceProfileHoles(app.project, entity, interaction.component);
-      if (holes.length > 0) {
+      if (holes.length > 0 || entity.metadata?.seams?.length) {
         extrudeMeshFaceWithProfileHoles(app.project, entity, interaction.component, holes, height);
         for (const hole of holes) {
           removeEntity(app.project, hole.entityId);
@@ -3083,7 +3280,8 @@ const updatePushPullPreview = (interaction, height) => {
 
 const beginPushPullPreview = (event) => {
   const hit = pickEntity(event);
-  if (hit?.entity.kind === "mesh" && !hit.coarse && Number.isInteger(hit.triangleIndex)) {
+  const selectedFace = app.componentSelection?.type === "face" ? getEntity(app.project, app.componentSelection.entityId) : null;
+  if (hit?.entity.kind === "mesh" && !hit.coarse && Number.isInteger(hit.triangleIndex) && !(selectedFace?.metadata?.planar && hit.entity.id !== selectedFace.id)) {
     const face = getMeshFaceRegion(app.project, hit.entity, hit.triangleIndex);
     if (face) {
       setComponentSelection({ type: "face", entityId: hit.entity.id, ...face, point: hit.point });
@@ -3104,6 +3302,20 @@ const beginPushPullPreview = (event) => {
     return;
   }
   const before = snapshot();
+  let hostIndent = null;
+  if (entity.metadata?.planar) {
+    for (const host of app.project.entities) {
+      if (host.id === entity.id || host.kind !== "mesh" || host.metadata?.planar || host.locked) continue;
+      for (let index = 0; index < host.indices.length / 3; index += 1) {
+        const face = getMeshFaceRegion(app.project, host, index);
+        if (face && faceProfileHoles(app.project, host, face).some((hole) => hole.entityId === entity.id)) {
+          hostIndent = { entityId: host.id, triangleIndex: index };
+          break;
+        }
+      }
+      if (hostIndent) break;
+    }
+  }
   app.interaction = {
     kind: "pushpull-preview",
     pointerId: event.pointerId,
@@ -3112,7 +3324,8 @@ const beginPushPullPreview = (event) => {
     baseEntity: structuredClone(entity),
     entityId: entity.id,
     component: structuredClone(component),
-    specialCircle: Boolean(entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal),
+    hostIndent,
+    specialCircle: Boolean(!hostIndent && entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal),
     height: 0
   };
   setStatus("Push/Pull preview started. Move the pointer, then click to apply.");
@@ -3343,7 +3556,10 @@ const drawingPointForEvent = (event) => {
     if (!rawPoint) {
       return null;
     }
-    const snap = resolvedSnapPoint(event, rawPoint, app.pending.surface);
+    const snap = event.shiftKey && app.activeTool === "line"
+      ? { point: rawPoint, kind: "inference", label: "locked drawing plane", surface: app.pending.surface }
+      : resolvedSnapPoint(event, rawPoint, app.pending.surface);
+    app.linePlaneLocked = event.shiftKey && app.activeTool === "line";
     app.snap = snap;
     return { point: snap.point, surface: app.pending.surface };
   }
@@ -3626,6 +3842,8 @@ const handlePointerDown = (event) => {
     return;
   }
   if (event.button === 0 && app.activeTool === "pushpull" && app.interaction?.kind === "pushpull-preview") {
+    const match = pushPullHeightFromHit(app.interaction, event);
+    if (match !== null) updatePushPullPreview(app.interaction, match);
     commitPushPullPreview();
     return;
   }
@@ -4238,6 +4456,10 @@ const bindInterface = () => {
     if (event.key === "Control") {
       unlockInference();
     }
+    if (event.key === "Shift") {
+      app.linePlaneLocked = false;
+      requestRender();
+    }
   });
   window.addEventListener("beforeunload", () => {
     if (app.dirty) {
@@ -4338,6 +4560,12 @@ const handleKeyboard = (event) => {
   const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
   const key = event.key.toLowerCase();
   if (event.metaKey || event.ctrlKey) {
+    if (!editingText && (key === "c" || key === "v")) {
+      event.preventDefault();
+      if (key === "c") copySelection();
+      else pasteSelection();
+      return;
+    }
     if (key === "z") {
       event.preventDefault();
       if (event.shiftKey) {
@@ -4386,6 +4614,10 @@ const handleKeyboard = (event) => {
   }
   if (event.key === "Control") {
     lockInference();
+  }
+  if (event.key === "Shift" && app.pending?.tool === "line") {
+    app.linePlaneLocked = true;
+    requestRender();
   }
   if (event.key === "Escape") {
     event.preventDefault();
@@ -4454,6 +4686,14 @@ const init = async () => {
   await migrateWorkspace();
   await restoreAutosave();
   loadPreferences();
+  for (const [id, property] of [["rotate-sensitivity", "rotateSensitivity"], ["move-sensitivity", "moveSensitivity"]]) {
+    const input = document.querySelector(`#${id}`);
+    input.value = String(app.camera[property]);
+    input.addEventListener("input", () => {
+      app.camera[property] = Number(input.value);
+      scheduleCameraAutosave();
+    });
+  }
   bindInterface();
   selectRibbon("home");
   setPaletteDetached(app.preferences.paletteDetached);

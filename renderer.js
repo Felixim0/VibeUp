@@ -381,7 +381,7 @@ export class Renderer {
     const { gl } = this;
     const vertexData = new Float32Array(entity.vertices);
     const indexData = vertexData.length / 3 > 65535 ? new Uint32Array(entity.indices) : new Uint16Array(entity.indices);
-    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices);
+    const edgeSource = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
     const edgeStartData = new Float32Array((edgeSource.length / 2) * 3);
     const edgeEndData = new Float32Array((edgeSource.length / 2) * 3);
     for (let index = 0; index < edgeSource.length; index += 2) {

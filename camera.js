@@ -20,6 +20,8 @@ export class OrbitCamera {
     this.pitch = 30 * DEGREE;
     this.distance = 400;
     this.projectionType = "perspective";
+    this.rotateSensitivity = 1;
+    this.moveSensitivity = 1;
   }
 
   getPosition() {
@@ -59,8 +61,8 @@ export class OrbitCamera {
   }
 
   orbit(deltaX, deltaY) {
-    this.yaw -= deltaX * 0.008;
-    this.pitch = clampPitch(this.pitch - deltaY * 0.008);
+    this.yaw -= deltaX * 0.008 * this.rotateSensitivity;
+    this.pitch = clampPitch(this.pitch - deltaY * 0.008 * this.rotateSensitivity);
     this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   }
 
@@ -92,7 +94,7 @@ export class OrbitCamera {
       right = [-Math.sin(this.yaw), Math.cos(this.yaw), 0];
     }
     const up = normalize3(cross3(right, direction));
-    const distancePerPixel = (this.distance * 0.82) / Math.max(viewportHeight, 1);
+    const distancePerPixel = (this.distance * 0.82 * this.moveSensitivity) / Math.max(viewportHeight, 1);
     this.target = add3(
       this.target,
       add3(scale3(right, -deltaX * distancePerPixel), scale3(up, deltaY * distancePerPixel))
@@ -135,6 +137,8 @@ export class OrbitCamera {
     this.pitch = 30 * DEGREE;
     this.distance = 400;
     this.projectionType = "perspective";
+    this.rotateSensitivity = 1;
+    this.moveSensitivity = 1;
   }
 
   serialize() {
@@ -143,7 +147,9 @@ export class OrbitCamera {
       yaw: this.yaw,
       pitch: this.pitch,
       distance: this.distance,
-      projectionType: this.projectionType
+      projectionType: this.projectionType,
+      rotateSensitivity: this.rotateSensitivity,
+      moveSensitivity: this.moveSensitivity
     };
   }
 
@@ -157,5 +163,7 @@ export class OrbitCamera {
     this.pitch = clampPitch(this.pitch);
     this.distance = Number.isFinite(data.distance) ? data.distance : this.distance;
     this.projectionType = data.projectionType === "parallel" ? "parallel" : "perspective";
+    this.rotateSensitivity = Number.isFinite(data.rotateSensitivity) ? Math.max(0.1, Math.min(4, data.rotateSensitivity)) : 1;
+    this.moveSensitivity = Number.isFinite(data.moveSensitivity) ? Math.max(0.1, Math.min(4, data.moveSensitivity)) : 1;
   }
 }
