@@ -260,7 +260,11 @@ button {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 16px 42px rgb(31 58 68 / 25%);
+  cursor: grab;
 }
+
+.floating-palette:active { cursor: grabbing; }
+.floating-palette button, .floating-palette input { cursor: pointer; }
 
 .floating-palette[hidden] {
   display: none;
@@ -451,12 +455,12 @@ button {
 }
 
 .selection-marquee.crossing {
-  border-color: #148a78;
-  background: rgb(80 205 184 / 16%);
+  border: 2px dotted #148a78;
+  background: rgb(80 205 184 / 12%);
 }
 
 .selection-marquee.contained {
-  border-color: #4e78c7;
+  border: 1px solid #4e78c7;
   background: rgb(78 120 199 / 12%);
 }
 

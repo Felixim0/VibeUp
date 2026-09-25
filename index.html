@@ -23,6 +23,7 @@
         </div>
         <div class="document-title" id="document-title">Untitled model</div>
         <div class="titlebar-actions">
+          <button class="icon-button" id="reattach-tools-button" type="button" hidden title="Reattach tools to the ribbon">Reattach tools</button>
           <button class="icon-button" id="install-button" type="button" hidden title="Install vibe-up">
             Install
           </button>
@@ -131,17 +132,14 @@
         </div>
 
         <div class="ribbon-group hidden" data-ribbon="view">
+          <button class="tool-button view-mode active" type="button" data-view-mode="shaded" title="Shaded view with faces and edges">Shaded</button>
+          <button class="tool-button view-mode" type="button" data-view-mode="x-ray" title="Transparent faces and selectable hidden lines">X-ray</button>
+          <button class="tool-button view-mode" type="button" data-view-mode="solid" title="Faces only, without edges or shading">Solid</button>
           <button class="tool-button" type="button" data-action="toggle-sidebar" title="Show or hide trays">
             <span class="tool-icon">&#9776;</span><span>Default Tray</span>
           </button>
           <button class="tool-button" type="button" data-action="toggle-grid" title="Toggle the drawing grid">
             <span class="tool-icon">#</span><span>Grid</span>
-          </button>
-          <button class="tool-button" type="button" data-action="toggle-edges" title="Toggle mesh edges">
-            <span class="tool-icon">&#9638;</span><span>Edges</span>
-          </button>
-          <button class="tool-button" type="button" data-action="toggle-shadows" title="Toggle soft directional shading">
-            <span class="tool-icon">&#9728;</span><span>Shadows</span>
           </button>
           <button class="tool-button" type="button" data-action="toggle-projection" title="Toggle perspective / parallel projection">
             <span class="tool-icon">&#9674;</span><span>Perspective</span>

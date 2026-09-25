@@ -99,7 +99,7 @@ const TOOL_CURSORS = {
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Click a face, edge, or line; triple-click for the entire model. Drag left-to-right for touching geometry, right-to-left for contained geometry. Ctrl/Cmd+A selects the current group or model.",
+  select: "Click a face, edge, or line; triple-click for the entire model. Drag left-to-right to enclose lines and bounded faces; right-to-left to cross lines and faces. X-ray selects through faces.",
   line: "Click a start and end point. Shift locks the starting plane (green preview). A line across a face splits it. Measurements accepts an exact length.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
@@ -152,6 +152,7 @@ const elements = {
   viewCube: document.querySelector("#view-cube"),
   ribbon: document.querySelector("#ribbon"),
   detachRibbon: document.querySelector("#detach-ribbon-button"),
+  reattachTools: document.querySelector("#reattach-tools-button"),
   attachRibbon: document.querySelector("#attach-ribbon-button"),
   floatingPalette: document.querySelector("#floating-palette"),
   floatingPaletteTitle: document.querySelector("#floating-palette-title"),
@@ -557,8 +558,8 @@ const updateSelectionMarquee = (start, current) => {
   const bounds = marqueeBounds(start, current);
   const marquee = elements.selectionMarquee;
   marquee.hidden = false;
-  marquee.classList.toggle("crossing", current.x >= start.x);
-  marquee.classList.toggle("contained", current.x < start.x);
+  marquee.classList.toggle("crossing", current.x < start.x);
+  marquee.classList.toggle("contained", current.x >= start.x);
   marquee.style.left = `${bounds.left}px`;
   marquee.style.top = `${bounds.top}px`;
   marquee.style.width = `${Math.max(1, bounds.right - bounds.left)}px`;
@@ -570,21 +571,15 @@ const hideSelectionMarquee = () => {
   elements.selectionMarquee.classList.remove("crossing", "contained");
 };
 
-const entityProjectedBounds = (entity) => {
-  const bounds = entityBounds(app.project, entity);
-  if (!bounds || !app.renderMatrices) {
+const entityProjectedBounds = (entity, worldPoints = null) => {
+  if (!app.renderMatrices) {
     return null;
   }
+  const world = worldPoints ?? (entity.kind === "mesh" ? meshWorldVertices(app.project, entity) : lineWorldPoints(app.project, entity));
   const corners = [];
-  for (const x of [bounds.min[0], bounds.max[0]]) {
-    for (const y of [bounds.min[1], bounds.max[1]]) {
-      for (const z of [bounds.min[2], bounds.max[2]]) {
-        const projected = projectPoint([x, y, z], app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
-        if (projected && projected[2] >= -1 && projected[2] <= 1) {
-          corners.push([projected[0] / app.renderer.pixelRatio, projected[1] / app.renderer.pixelRatio]);
-        }
-      }
-    }
+  for (let index = 0; index < world.length; index += 3) {
+    const projected = screenPoint(world.slice(index, index + 3));
+    if (projected) corners.push(projected);
   }
   if (corners.length === 0) {
     return null;
@@ -601,70 +596,142 @@ const rectsOverlap = (first, second) => (
   first.left <= second.right && first.right >= second.left && first.top <= second.bottom && first.bottom >= second.top
 );
 
-const projectedGeometryTouches = (entity, bounds, contained) => {
-  const project = (point) => {
-    const screen = projectPoint(point, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
-    return screen && screen[2] >= -1 && screen[2] <= 1 ? [screen[0] / app.renderer.pixelRatio, screen[1] / app.renderer.pixelRatio] : null;
-  };
-  const inside = (point) => point[0] >= bounds.left && point[0] <= bounds.right && point[1] >= bounds.top && point[1] <= bounds.bottom;
-  const segmentTouches = (first, second) => {
-    if (inside(first) || inside(second)) {
-      return true;
+const segmentBoxInterval = (a, b, bounds) => {
+  let low = 0;
+  let high = 1;
+  for (const [axis, minimum, maximum] of [[0, bounds.left, bounds.right], [1, bounds.top, bounds.bottom]]) {
+    const delta = b[axis] - a[axis];
+    if (Math.abs(delta) < 0.000001) {
+      if (a[axis] < minimum || a[axis] > maximum) return null;
+      continue;
     }
-    const crosses = (a, b, c, d) => {
-      const denominator = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-      if (Math.abs(denominator) < 0.000001) return false;
-      const u = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / denominator;
-      const v = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / denominator;
-      return u >= 0 && u <= 1 && v >= 0 && v <= 1;
-    };
-    return [
-      [[bounds.left, bounds.top], [bounds.right, bounds.top]],
-      [[bounds.right, bounds.top], [bounds.right, bounds.bottom]],
-      [[bounds.right, bounds.bottom], [bounds.left, bounds.bottom]],
-      [[bounds.left, bounds.bottom], [bounds.left, bounds.top]]
-    ].some(([a, b]) => crosses(first, second, a, b));
-  };
-  const world = entity.kind === "mesh" ? meshWorldVertices(app.project, entity) : lineWorldPoints(app.project, entity);
-  const projected = [];
-  for (let index = 0; index < world.length; index += 3) {
-    projected.push(project(world.slice(index, index + 3)));
+    const entry = (minimum - a[axis]) / delta;
+    const exit = (maximum - a[axis]) / delta;
+    low = Math.max(low, Math.min(entry, exit));
+    high = Math.min(high, Math.max(entry, exit));
+    if (low > high) return null;
   }
-  if (contained) return projected.length > 0 && projected.every((point) => point && inside(point));
-  if (entity.kind !== "mesh") {
-    return projected.some((point, index) => index > 0 && point && projected[index - 1] && segmentTouches(point, projected[index - 1]));
+  return [low, high];
+};
+
+const clipTriangleToBox = (triangle, bounds) => {
+  let polygon = triangle;
+  for (const [axis, limit, sign] of [[0, bounds.left, 1], [0, bounds.right, -1], [1, bounds.top, 1], [1, bounds.bottom, -1]]) {
+    const output = [];
+    for (let index = 0; index < polygon.length; index += 1) {
+      const a = polygon[index];
+      const b = polygon[(index + 1) % polygon.length];
+      const da = (a[axis] - limit) * sign;
+      const db = (b[axis] - limit) * sign;
+      if ((da >= 0) !== (db >= 0)) {
+        const fraction = da / (da - db);
+        output.push(a.map((value, coordinate) => value + (b[coordinate] - value) * fraction));
+      }
+      if (db >= 0) output.push(b);
+    }
+    polygon = output;
+    if (!polygon.length) break;
   }
-  for (let index = 0; index < entity.indices.length; index += 3) {
-    const triangle = entity.indices.slice(index, index + 3).map((vertex) => projected[vertex]);
-    if (triangle.some((point) => !point)) continue;
-    if (triangle.some(inside) || triangle.some((point, vertex) => segmentTouches(point, triangle[(vertex + 1) % 3]))) return true;
-    const centre = [(bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2];
-    const sign = (a, b, c) => (a[0] - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (a[1] - c[1]);
-    const sides = triangle.map((point, vertex) => sign(centre, point, triangle[(vertex + 1) % 3]));
-    if (!sides.some((value) => value < 0) || !sides.some((value) => value > 0)) return true;
+  return polygon;
+};
+
+const polygonArea = (polygon) => Math.abs(polygon.reduce((sum, a, index) => {
+  const b = polygon[(index + 1) % polygon.length];
+  return sum + a[0] * b[1] - b[0] * a[1];
+}, 0)) / 2;
+
+const pointVisible = (point, worldMeshes = null) => {
+  if (app.project.settings.viewMode === "x-ray") return true;
+  const projected = projectPoint(point, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+  if (!projected) return false;
+  const ray = rayFromScreen(projected[0], projected[1], app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+  if (!ray) return false;
+  const distance = distance3(ray.origin, point);
+  const meshes = worldMeshes ?? allRenderableEntities(app.project).filter((entity) => entity.kind === "mesh" && entity.indices.length / 3 <= MAX_SNAP_MESH_TRIANGLES).map((entity) => ({ entity, world: meshWorldVertices(app.project, entity) }));
+  for (const { entity, world } of meshes) {
+    for (let index = 0; index < entity.indices.length; index += 3) {
+      const triangle = entity.indices.slice(index, index + 3).map((vertex) => world.slice(vertex * 3, vertex * 3 + 3));
+      const hit = intersectRayTriangle(ray, ...triangle);
+      if (hit && hit.distance < distance - 0.01) return false;
+    }
   }
-  return false;
+  return true;
+};
+
+const screenPoint = (point) => {
+  const projected = projectPoint(point, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+  return projected && projected[2] >= -1 && projected[2] <= 1 ? [projected[0] / app.renderer.pixelRatio, projected[1] / app.renderer.pixelRatio] : null;
+};
+
+const marqueeSegment = (bounds, a, b, contained, meshes) => {
+  const first = screenPoint(a);
+  const second = screenPoint(b);
+  if (!first || !second) return false;
+  const interval = segmentBoxInterval(first, second, bounds);
+  if (!interval || (contained && (interval[0] > 0.00001 || interval[1] < 0.99999))) return false;
+  const sample = add3(a, scale3(subtract3(b, a), (interval[0] + interval[1]) / 2));
+  return pointVisible(sample, meshes);
 };
 
 const marqueeSelect = (start, current, mode = "replace") => {
   const bounds = marqueeBounds(start, current);
-  const touching = current.x >= start.x;
-  const ids = [];
+  const contained = current.x >= start.x;
+  const components = [];
+  const prior = mode === "add" ? app.componentSelection : null;
+  const selectedIds = mode === "add" ? [...app.selection] : [];
+  const meshes = app.project.settings.viewMode === "x-ray" ? [] : allRenderableEntities(app.project).filter((entity) => entity.kind === "mesh" && entity.indices.length / 3 <= MAX_SNAP_MESH_TRIANGLES).map((entity) => ({ entity, world: meshWorldVertices(app.project, entity) }));
+  const worldById = new Map(meshes.map(({ entity, world }) => [entity.id, world]));
   for (const entity of app.project.entities) {
     if (entity.kind === "group" || !isEntityVisible(app.project, entity)) {
       continue;
     }
-    const projected = entityProjectedBounds(entity);
-    if (!projected) {
+    const projected = entityProjectedBounds(entity, worldById.get(entity.id));
+    if (!projected || !rectsOverlap(bounds, projected)) {
       continue;
     }
-    const selected = rectsOverlap(bounds, projected) && projectedGeometryTouches(entity, bounds, !touching);
-    if (selected) {
-      ids.push(entity.id);
+    if (entity.kind === "edge" || entity.kind === "annotation") {
+      const points = lineWorldPoints(app.project, entity);
+      const matches = [];
+      for (let index = 0; index + 5 < points.length; index += 3) matches.push(marqueeSegment(bounds, points.slice(index, index + 3), points.slice(index + 3, index + 6), contained, meshes));
+      if (matches.length && (contained ? matches.every(Boolean) : matches.some(Boolean))) components.push(lineComponent(entity));
+    } else if (entity.kind === "mesh") {
+      const world = worldById.get(entity.id) ?? meshWorldVertices(app.project, entity);
+      const edges = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
+      for (let index = 0; index < edges.length; index += 2) {
+        const a = world.slice(edges[index] * 3, edges[index] * 3 + 3);
+        const b = world.slice(edges[index + 1] * 3, edges[index + 1] * 3 + 3);
+        if (marqueeSegment(bounds, a, b, contained, meshes)) components.push({ type: "edge", entityId: entity.id, start: a, end: b });
+      }
+      const visited = new Set();
+      for (let triangleIndex = 0; triangleIndex < entity.indices.length / 3; triangleIndex += 1) {
+        if (visited.has(triangleIndex)) continue;
+        const face = getMeshFaceRegion(app.project, entity, triangleIndex);
+        if (!face) continue;
+        face.triangleIndices.forEach((index) => visited.add(index));
+        if (contained) {
+          const boundary = faceBoundaryEdges(entity, face);
+          if (boundary.length && boundary.every(({ start: a, end: b }) => marqueeSegment(bounds, a, b, true, meshes))) components.push(faceComponent(entity, face));
+        } else if (face.triangleIndices.some((index) => {
+          const points = entity.indices.slice(index * 3, index * 3 + 3).map((vertex) => world.slice(vertex * 3, vertex * 3 + 3));
+          const projectedTriangle = points.map(screenPoint);
+          if (projectedTriangle.some((point) => !point)) return false;
+          const clipped = clipTriangleToBox(projectedTriangle, bounds);
+          if (clipped.length < 3 || polygonArea(clipped) < 0.1) return false;
+          const centre = clipped.reduce((sum, point) => add3(sum, point), [0, 0]).map((value) => value / clipped.length);
+          const ray = rayFromScreen(centre[0] * app.renderer.pixelRatio, centre[1] * app.renderer.pixelRatio, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+          const hit = ray ? intersectRayTriangle(ray, ...points) : null;
+          const sample = hit?.point;
+          return sample && pointVisible(sample, meshes);
+        })) components.push(faceComponent(entity, face));
+      }
     }
   }
-  setSelection(ids, mode);
-  setStatus(ids.length === 0 ? "No entities matched the selection box." : `${ids.length} ${touching ? "touching" : "contained"} entities selected.`);
+  if (prior?.type === "multi") components.unshift(...prior.components);
+  else if (prior) components.unshift(prior);
+  selectedIds.push(...components.map((component) => component.entityId));
+  setSelection([...new Set(selectedIds)]);
+  if (components.length) setComponentSelection({ type: "multi", components });
+  setStatus(`${components.length} ${contained ? "contained" : "crossing"} components selected.`);
 };
 
 const getRay = (event) => {
@@ -698,6 +765,11 @@ const pointOnPlane = (event, planePoint, planeNormal) => {
   }
   const point = intersectRayPlane(ray, planePoint, planeNormal);
   return point ? snapPointOnSurface(point, { point: planePoint, normal: planeNormal }) : null;
+};
+
+const rawPointOnPlane = (event, planePoint, planeNormal) => {
+  const ray = getRay(event);
+  return ray ? intersectRayPlane(ray, planePoint, planeNormal) : null;
 };
 
 const snapTolerance = () => Math.max(1, app.camera.distance * 0.018);
@@ -768,10 +840,16 @@ const unlockInference = () => {
 
 const closestSnap = (rawPoint, surface, options = {}) => {
   const tolerance = options.tolerance ?? snapTolerance();
+  const pointer = options.event ? getPointer(options.event) : null;
+  const matrices = pointer ? app.camera.getMatrices(app.renderer.width / app.renderer.height) : null;
   let best = null;
   const consider = (point, kind, label, distance = distance3(rawPoint, point), line = null) => {
     if (Math.abs(dot3(subtract3(point, surface.point), surface.normal)) > tolerance * 0.05) {
       return;
+    }
+    if (pointer) {
+      const projected = projectPoint(point, app.renderer.width, app.renderer.height, matrices.projection, matrices.view);
+      if (!projected || projected[2] < -1 || projected[2] > 1 || Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y) > 12 * app.renderer.pixelRatio) return;
     }
     const priority = ["vertex", "endpoint", "midpoint"].includes(kind) ? 0.7 : 1;
     if (distance <= tolerance && (!best || distance * priority < best.distance * best.priority)) {
@@ -788,17 +866,15 @@ const closestSnap = (rawPoint, surface, options = {}) => {
       for (let index = 0; index < vertices.length; index += 3) {
         consider([vertices[index], vertices[index + 1], vertices[index + 2]], "vertex", "endpoint");
       }
-      for (let index = 0; index < entity.indices.length; index += 3) {
-        const triangle = [entity.indices[index], entity.indices[index + 1], entity.indices[index + 2]];
-        for (let edge = 0; edge < 3; edge += 1) {
-          const firstIndex = triangle[edge] * 3;
-          const secondIndex = triangle[(edge + 1) % 3] * 3;
-          const start = [vertices[firstIndex], vertices[firstIndex + 1], vertices[firstIndex + 2]];
-          const end = [vertices[secondIndex], vertices[secondIndex + 1], vertices[secondIndex + 2]];
-          const nearest = nearestPointOnSegment(rawPoint, start, end);
-          consider(nearest.point, "edge", "on edge", undefined, { start, end });
-          consider(midpoint3(start, end), "midpoint", "midpoint");
-        }
+      const edges = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
+      for (let index = 0; index < edges.length; index += 2) {
+        const firstIndex = edges[index] * 3;
+        const secondIndex = edges[index + 1] * 3;
+        const start = vertices.slice(firstIndex, firstIndex + 3);
+        const end = vertices.slice(secondIndex, secondIndex + 3);
+        const nearest = nearestPointOnSegment(rawPoint, start, end);
+        consider(nearest.point, "edge", "on edge", undefined, { start, end });
+        consider(midpoint3(start, end), "midpoint", "midpoint");
       }
     } else if (entity.kind === "edge" || entity.kind === "annotation") {
       const points = lineWorldPoints(app.project, entity);
@@ -825,7 +901,7 @@ const resolvedSnapPoint = (event, rawPoint, surface, options = {}) => {
       surface: app.inference.surface
     };
   }
-  return closestSnap(rawPoint, surface, options) ?? { point: rawPoint, kind: "grid", label: "grid", surface };
+  return closestSnap(rawPoint, surface, { ...options, event }) ?? { point: rawPoint, kind: "grid", label: "grid", surface };
 };
 
 const updateSnapIndicator = () => {
@@ -938,6 +1014,7 @@ const pickEdge = (event) => {
         const startWorld = [points[index], points[index + 1], points[index + 2]];
         const endWorld = [points[index + 3], points[index + 4], points[index + 5]];
         const point = add3(startWorld, scale3(subtract3(endWorld, startWorld), projection.amount));
+        if (app.project.settings.viewMode !== "x-ray" && !pointVisible(point)) continue;
         closest = {
           entity,
           start: startWorld,
@@ -991,7 +1068,7 @@ const pickEntity = (event) => {
     }
   }
   const edge = pickEdge(event);
-  return edge && (!closest || edge.rayDistance <= closest.distance + 0.01) ? edge : closest;
+  return edge && (app.project.settings.viewMode === "x-ray" || !closest || edge.rayDistance <= closest.distance + 0.01) ? edge : closest;
 };
 
 const pickMeshEdge = (event, meshHit) => {
@@ -1021,6 +1098,7 @@ const pickMeshEdge = (event, meshHit) => {
     const projection = screenSegmentProjection([pointer.x, pointer.y], start, end);
     const point = add3(start3, scale3(subtract3(end3, start3), projection.amount));
     if (projection.distance <= threshold && (!closest || projection.distance < closest.distance)) {
+      if (app.project.settings.viewMode !== "x-ray" && !pointVisible(point)) continue;
       closest = {
         entity: meshHit.entity,
         start: start3,
@@ -1031,7 +1109,7 @@ const pickMeshEdge = (event, meshHit) => {
       };
     }
   }
-  if (meshHit.distance !== undefined && closest && closest.rayDistance > meshHit.distance + 0.01) {
+  if (app.project.settings.viewMode !== "x-ray" && meshHit.distance !== undefined && closest && closest.rayDistance > meshHit.distance + 0.01) {
     return null;
   }
   return closest;
@@ -1424,7 +1502,7 @@ const snapHoverPoint = (event) => {
     const hit = pickEntity(event);
     if (hit?.point) {
       const meshEdge = hit.entity.kind === "mesh" ? pickVisibleMeshEdge(event, hit.entity) : pickVisibleMeshEdge(event);
-      if (meshEdge) {
+      if (meshEdge && (app.project.settings.viewMode === "x-ray" || pointVisible(meshEdge.point))) {
         app.snap = { point: meshEdge.point, kind: "edge", label: "on edge", line: { start: meshEdge.start, end: meshEdge.end }, surface: drawingSurfaceFromHit(hit) };
       } else if (hit.entity.kind === "edge" || hit.entity.kind === "annotation") {
         app.snap = { point: hit.point, kind: "edge", label: "on line", line: { start: hit.start, end: hit.end }, surface: drawingSurfaceFromHit(hit) };
@@ -1515,7 +1593,9 @@ const populateFloatingPalette = () => {
       const button = source.cloneNode(true);
       button.removeAttribute("id");
       button.addEventListener("click", () => {
-        if (button.dataset.tool) {
+        if (button.dataset.viewMode) {
+          setViewMode(button.dataset.viewMode);
+        } else if (button.dataset.tool) {
           setTool(button.dataset.tool);
         } else if (button.dataset.action) {
           executeAction(button.dataset.action);
@@ -1531,11 +1611,13 @@ const populateFloatingPalette = () => {
   elements.floatingPaletteTools.replaceChildren(fragment);
 };
 
-const setPaletteDetached = (detached) => {
+const setPaletteDetached = (detached, resetPosition = false) => {
+  if (detached && resetPosition) app.paletteOffset = { x: 26, y: 148 };
   app.paletteDetached = detached;
   elements.appShell.classList.toggle("palette-detached", detached);
   elements.ribbon.classList.toggle("detached", detached);
   elements.floatingPalette.hidden = !detached;
+  elements.reattachTools.hidden = !detached;
   elements.detachRibbon.textContent = detached ? "Attach tools" : "Detach tools";
   elements.detachRibbon.title = detached ? "Attach tools to the ribbon" : "Detach tools into a floating palette";
   if (detached) {
@@ -1551,14 +1633,16 @@ const setPaletteDetached = (detached) => {
   refreshToolPresentation();
 };
 
-const togglePaletteDetached = () => setPaletteDetached(!app.paletteDetached);
+const togglePaletteDetached = () => setPaletteDetached(!app.paletteDetached, !app.paletteDetached);
 
 const bindFloatingPalette = () => {
   let drag = null;
   elements.detachRibbon.addEventListener("click", togglePaletteDetached);
+  elements.reattachTools.addEventListener("click", () => setPaletteDetached(false));
   elements.attachRibbon.addEventListener("click", () => setPaletteDetached(false));
-  elements.floatingPaletteTitle.addEventListener("pointerdown", (event) => {
-    if (event.target.closest("button")) {
+  elements.floatingPalette.addEventListener("pointerdown", (event) => {
+    const bounds = elements.floatingPalette.getBoundingClientRect();
+    if (event.target.closest("button, input, select, textarea") || (event.clientX >= bounds.right - 16 && event.clientY >= bounds.bottom - 16)) {
       return;
     }
     drag = {
@@ -1566,9 +1650,9 @@ const bindFloatingPalette = () => {
       offsetX: event.clientX - app.paletteOffset.x,
       offsetY: event.clientY - app.paletteOffset.y
     };
-    elements.floatingPaletteTitle.setPointerCapture(event.pointerId);
+    elements.floatingPalette.setPointerCapture(event.pointerId);
   });
-  elements.floatingPaletteTitle.addEventListener("pointermove", (event) => {
+  elements.floatingPalette.addEventListener("pointermove", (event) => {
     if (!drag || drag.pointerId !== event.pointerId) {
       return;
     }
@@ -1584,8 +1668,8 @@ const bindFloatingPalette = () => {
     app.preferences.paletteY = app.paletteOffset.y;
     savePreferences();
   };
-  elements.floatingPaletteTitle.addEventListener("pointerup", finishDrag);
-  elements.floatingPaletteTitle.addEventListener("pointercancel", finishDrag);
+  elements.floatingPalette.addEventListener("pointerup", finishDrag);
+  elements.floatingPalette.addEventListener("pointercancel", finishDrag);
 };
 
 const activateSidePanel = (panelId) => {
@@ -2190,6 +2274,7 @@ const normalizeSettings = (raw) => {
     gridVisible: settings.gridVisible !== false,
     edgesVisible: settings.edgesVisible !== false,
     shadowsVisible: settings.shadowsVisible === true,
+    viewMode: ["shaded", "x-ray", "solid"].includes(settings.viewMode) ? settings.viewMode : "shaded",
     projection: settings.projection === "parallel" ? "parallel" : "perspective",
     snapIncrement: Number.isFinite(settings.snapIncrement) && settings.snapIncrement > 0 ? settings.snapIncrement : 1,
     circleSegments: Number.isInteger(settings.circleSegments) ? Math.max(3, Math.min(96, settings.circleSegments)) : 24,
@@ -2920,6 +3005,13 @@ const toggleProjectSetting = (key) => {
   });
 };
 
+const setViewMode = (mode) => {
+  if (!["shaded", "x-ray", "solid"].includes(mode)) return;
+  mutate(`Set ${mode} view`, () => { app.project.settings.viewMode = mode; });
+  document.querySelectorAll("[data-view-mode]").forEach((button) => button.classList.toggle("active", button.dataset.viewMode === mode));
+  setStatus(`${mode === "x-ray" ? "X-ray" : mode[0].toUpperCase() + mode.slice(1)} view.`);
+};
+
 const toggleProjection = () => {
   mutate("Toggle projection", () => {
     app.project.settings.projection = app.project.settings.projection === "perspective" ? "parallel" : "perspective";
@@ -2981,21 +3073,17 @@ const parseMeasurements = (source) => {
   });
 };
 
-const createLine = (start, end) => {
+const createLine = (start, end, surface = null) => {
   if (distance3(start, end) < 0.0001) {
     throw new Error("A line needs non-zero length.");
   }
   return mutate("Draw line", () => {
-    for (const host of app.project.entities) {
-      if (host.kind !== "mesh" || host.locked || !isEntityVisible(app.project, host)) {
-        continue;
-      }
-      for (let triangle = 0; triangle < host.indices.length / 3; triangle += 1) {
-        const face = getMeshFaceRegion(app.project, host, triangle);
-        if (face && splitMeshFaceByLine(app.project, host, face, start, end)) {
-          app.renderer.invalidate(host.id);
-          return host;
-        }
+    const host = surface?.entityId ? getEntity(app.project, surface.entityId) : null;
+    if (host?.kind === "mesh" && !host.locked && Number.isInteger(surface.triangleIndex)) {
+      const face = getMeshFaceRegion(app.project, host, surface.triangleIndex);
+      if (face && splitMeshFaceByLine(app.project, host, face, start, end)) {
+        app.renderer.invalidate(host.id);
+        return host;
       }
     }
     return addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] }));
@@ -3487,7 +3575,7 @@ const applyMeasurements = () => {
       const output = planarLength > 0.0001
         ? add3(start, add3(scale3(tangent, (dot3(direction, tangent) / planarLength) * values[0]), scale3(bitangent, (dot3(direction, bitangent) / planarLength) * values[0])))
         : add3(start, scale3(tangent, values[0]));
-      const entity = createLine(start, output);
+      const entity = createLine(start, output, pending.surface);
       if (entity) {
         setSelection([entity.id]);
         app.pending = null;
@@ -3547,18 +3635,27 @@ const drawingTools = new Set(["line", "rectangle", "circle", "polygon", "arc", "
 
 const drawingSurfaceFromHit = (hit) => ({
   point: Array.from(hit.point),
-  normal: Array.from(hit.normal ?? [0, 0, 1])
+  normal: Array.from(hit.normal ?? [0, 0, 1]),
+  entityId: hit.entity.kind === "mesh" ? hit.entity.id : null,
+  triangleIndex: hit.triangleIndex
 });
 
 const drawingPointForEvent = (event) => {
   if (app.pending?.surface) {
-    const rawPoint = pointOnPlane(event, app.pending.surface.point, app.pending.surface.normal);
+    const rawPoint = app.activeTool === "line"
+      ? rawPointOnPlane(event, app.pending.surface.point, app.pending.surface.normal)
+      : pointOnPlane(event, app.pending.surface.point, app.pending.surface.normal);
     if (!rawPoint) {
       return null;
     }
+    const activeSurface = app.pending.surface;
+    const hit = !event.shiftKey && app.activeTool === "line" ? pickEntity(event) : null;
+    const faceNormal = hit?.normal ?? null;
+    const sameFace = hit?.entity.id === activeSurface.entityId && faceNormal && Math.abs(dot3(faceNormal, activeSurface.normal)) > 0.999;
+    const raw = sameFace ? hit.point : rawPoint;
     const snap = event.shiftKey && app.activeTool === "line"
-      ? { point: rawPoint, kind: "inference", label: "locked drawing plane", surface: app.pending.surface }
-      : resolvedSnapPoint(event, rawPoint, app.pending.surface);
+      ? { point: raw, kind: "inference", label: "locked drawing plane", surface: activeSurface }
+      : resolvedSnapPoint(event, raw, activeSurface);
     app.linePlaneLocked = event.shiftKey && app.activeTool === "line";
     app.snap = snap;
     return { point: snap.point, surface: app.pending.surface };
@@ -3566,12 +3663,12 @@ const drawingPointForEvent = (event) => {
   const hit = pickEntity(event);
   if (hit?.entity.kind === "mesh" && hit.point && hit.normal) {
     const surface = drawingSurfaceFromHit(hit);
-    const snap = resolvedSnapPoint(event, snapPointOnSurface(hit.point, surface), surface);
+    const snap = resolvedSnapPoint(event, app.activeTool === "line" ? hit.point : snapPointOnSurface(hit.point, surface), surface);
     app.snap = snap;
     return { point: snap.point, surface };
   }
   const surface = { point: [0, 0, 0], normal: [0, 0, 1] };
-  const rawPoint = pointOnPlane(event, surface.point, surface.normal);
+  const rawPoint = app.activeTool === "line" ? rawPointOnPlane(event, surface.point, surface.normal) : pointOnPlane(event, surface.point, surface.normal);
   if (!rawPoint) {
     return null;
   }
@@ -3603,7 +3700,7 @@ const handleDrawingClick = (event, point, surface = null) => {
     const points = app.pending.points;
     const activeSurface = app.pending.surface ?? surface;
     if (tool === "line") {
-      const entity = createLine(points[0], point);
+      const entity = createLine(points[0], point, activeSurface);
       if (entity) {
         setSelection([entity.id]);
         setStatus("Drew line on the active surface.");
@@ -3825,7 +3922,6 @@ const selectionClickCount = (pointer) => {
 const handlePointerDown = (event) => {
   elements.canvas.focus({ preventScroll: true });
   if (event.button === 2 || event.altKey) {
-    cancelPushPullPreview();
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
       app.interaction = null;
@@ -3836,7 +3932,7 @@ const handlePointerDown = (event) => {
       app.camera.orbitAround(pivot);
     }
     const pointer = getPointer(event);
-    app.interaction = { kind: "orbit", pointerId: event.pointerId, lastPointer: pointer, pivot };
+    app.interaction = { kind: "orbit", pointerId: event.pointerId, lastPointer: pointer, pivot, resumePreview: app.interaction?.kind === "pushpull-preview" ? app.interaction : null };
     elements.canvas.setPointerCapture(event.pointerId);
     setViewportCursor("grabbing");
     return;
@@ -3848,14 +3944,13 @@ const handlePointerDown = (event) => {
     return;
   }
   if (event.button === 1) {
-    cancelPushPullPreview();
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
       app.interaction = null;
       app.snap = null;
     }
     const pointer = getPointer(event);
-    app.interaction = { kind: "pan", pointerId: event.pointerId, lastPointer: pointer };
+    app.interaction = { kind: "pan", pointerId: event.pointerId, lastPointer: pointer, resumePreview: app.interaction?.kind === "pushpull-preview" ? app.interaction : null };
     elements.canvas.setPointerCapture(event.pointerId);
     setViewportCursor("grabbing");
     return;
@@ -3987,7 +4082,7 @@ const handlePointerDown = (event) => {
   }
   if (tool === "select") {
     const hit = pickEntity(event);
-    const meshEdge = pickVisibleMeshEdge(event, hit?.entity.kind === "mesh" ? hit.entity : null);
+    const meshEdge = pickVisibleMeshEdge(event, app.project.settings.viewMode === "x-ray" ? null : hit?.entity.kind === "mesh" ? hit.entity : null);
     const pointer = getPointer(event);
     const clickCount = selectionClickCount(pointer);
     if (!hit) {
@@ -4010,6 +4105,11 @@ const handlePointerDown = (event) => {
     }
     if (clickCount > 1) {
       selectComponentByClickCount(event, hit, clickCount);
+      return;
+    }
+    if (meshEdge && app.project.settings.viewMode === "x-ray") {
+      setComponentSelection({ type: "edge", entityId: meshEdge.entity.id, start: meshEdge.start, end: meshEdge.end, point: meshEdge.point });
+      setStatus("Edge selected through transparent faces.");
       return;
     }
     if (meshEdge && meshEdge.entity.id === hit.entity.id) {
@@ -4196,6 +4296,10 @@ const handlePointerUp = (event) => {
   }
   setViewportCursor();
   if (interaction.kind === "orbit" || interaction.kind === "pan" || interaction.kind === "zoom") {
+    if (interaction.resumePreview) {
+      app.interaction = interaction.resumePreview;
+      app.interaction.startPointer = getPointer(event);
+    }
     scheduleCameraAutosave();
     requestRender();
     return;
@@ -4383,6 +4487,7 @@ const executeAction = (action) => {
 };
 
 const bindInterface = () => {
+  document.querySelectorAll("[data-view-mode]").forEach((button) => button.addEventListener("click", () => setViewMode(button.dataset.viewMode)));
   document.querySelectorAll(".menu-button").forEach((button) => button.addEventListener("click", () => selectRibbon(button.dataset.menu)));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => executeAction(button.dataset.action)));
   document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
@@ -4685,6 +4790,7 @@ const init = async () => {
   }
   await migrateWorkspace();
   await restoreAutosave();
+  document.querySelectorAll("[data-view-mode]").forEach((button) => button.classList.toggle("active", button.dataset.viewMode === app.project.settings.viewMode));
   loadPreferences();
   for (const [id, property] of [["rotate-sensitivity", "rotateSensitivity"], ["move-sensitivity", "moveSensitivity"]]) {
     const input = document.querySelector(`#${id}`);

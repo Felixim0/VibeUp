@@ -71,6 +71,7 @@ export const createEmptyProject = () => ({
     gridVisible: true,
     edgesVisible: true,
     shadowsVisible: false,
+    viewMode: "shaded",
     projection: "perspective",
     snapIncrement: 1,
     circleSegments: 24,
@@ -1458,6 +1459,7 @@ export const splitMeshFaceByLine = (project, entity, face, start, end) => {
   if (entity.kind !== "mesh" || !face || distance3(start, end) < 0.0001) {
     return false;
   }
+  if (face.triangleIndices.length > 2000) return false;
   const boundary = faceBoundaryLoop(project, entity, face);
   if (!boundary || Math.abs(dot3(face.normal, subtract3(start, face.point))) > 0.001 || Math.abs(dot3(face.normal, subtract3(end, face.point))) > 0.001) {
     return false;
@@ -1503,6 +1505,7 @@ export const splitMeshFaceByLine = (project, entity, face, start, end) => {
   }
   const vertices = Array.from(entity.vertices);
   const indices = [];
+  const worldMatrix = entityWorldMatrix(project, entity);
   const map = new Map();
   for (let index = 0; index < vertices.length / 3; index += 1) {
     map.set(meshPointKey(localPointAt(vertices, index)), index);
@@ -1518,8 +1521,8 @@ export const splitMeshFaceByLine = (project, entity, face, start, end) => {
         for (let edge = 0; edge < 3; edge += 1) {
           const first = triangle[edge];
           const second = triangle[(edge + 1) % 3];
-          const a = transformPoint(entityWorldMatrix(project, entity), localPointAt(vertices, first));
-          const b = transformPoint(entityWorldMatrix(project, entity), localPointAt(vertices, second));
+          const a = transformPoint(worldMatrix, localPointAt(vertices, first));
+          const b = transformPoint(worldMatrix, localPointAt(vertices, second));
           if (distance3(point, a) < 0.000001 || distance3(point, b) < 0.000001 || distance3(nearestPointOnBoundary(point, a, b), point) > 0.000001) continue;
           const local = transformPoint(inverse, point);
           const key = meshPointKey(local);

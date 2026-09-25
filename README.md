@@ -13,13 +13,14 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 ## Core workflow
 
 - **Select is component-aware.** Click once to select a face, edge, or line; double-click a face to include its boundary edges; triple-click to select the entire visible model. Dragging a selected object moves it on the clicked face plane.
-- **Directional box selection.** Drag empty space left-to-right to select projected items that touch the dotted box; drag right-to-left to select only projected items fully contained by it. `Ctrl/Cmd+A` selects all visible model items, or all items inside the current group.
+- **Directional box selection.** Drag left-to-right to select only fully enclosed lines and faces whose boundary lines are enclosed. Drag right-to-left for a dotted box that selects crossing lines and intersecting face regions. Hidden components are selectable through faces in X-ray only. `Ctrl/Cmd+A` selects all visible model items or items in the current group.
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Non-Select cursor art sits down-left of the exact snap point so it never hides the inference marker.
 - Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.
 - **Move mode is click-first.** A single click selects an object and a drag moves it, matching the direct Select workflow.
 - Locked objects remain selectable so they can be unlocked from Entity Info; all edit operations remain blocked until unlocked.
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
 - **Detachable tools.** Use **Detach tools** to open a draggable, resizable floating palette. Its tool groups have the same names as the ribbon menus and are separated by section rules. It can be narrowed substantially or positioned partly offscreen, while the main ribbon disappears to preserve workspace height.
+- Reattach from the top bar or palette close button. Drag any non-tool area of the palette to move it; detaching again resets its position.
 - The detachable palette can remain partly offscreen when deliberately positioned there.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
@@ -58,6 +59,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Draw a line from one boundary edge of a face to another to split the face into two separately selectable, extrudable regions. Push a drawn closed profile into an existing host face to create a recessed cut.
 - Dimensioned box and cylinder creation.
 - Push/Pull is click-move-click: click a face, inspect the live shape preview as the pointer moves, then click again to commit. Escape cancels the preview.
+- Middle-drag pans and right/Alt-drag orbits during the Push/Pull preview without cancelling it; wheel zoom remains available.
 - Clicking another face or line during a live Push/Pull matches its height along the selected face normal.
 - Offset planar faces and create a straight-vector Follow Me sweep.
 - Move, protractor rotate, scale, erase, paint, and reverse faces.
@@ -67,6 +69,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 ### View and presentation
 
 - Orbit, pan, zoom, top/front/right/isometric views, and Zoom Extents.
+- View ribbon offers **Shaded** (the default faces and edges), **X-ray** (transparent faces and selectable hidden lines), and **Solid** (unshaded faces without edges).
 - Perspective or parallel projection.
 - Grid and mesh-edge toggles, with thicker red, green, and blue world axes, restrained depth-tested committed lines, and high-visibility live drawing previews. Face back-sides are shown in blue to make reversed winding visible.
 - Wheel zoom slows proportionally as the camera approaches the model for fine positioning.

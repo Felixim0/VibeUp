@@ -518,15 +518,15 @@ export class Renderer {
     gl.uniformMatrix4fv(meshProgram.uniforms.uViewProjection, false, viewProjection);
     gl.uniform3fv(meshProgram.uniforms.uColor, color);
     gl.uniform3fv(meshProgram.uniforms.uLightDirection, normalize3([-0.4, -0.55, 0.73]));
-    gl.uniform1i(meshProgram.uniforms.uShadows, settings.shadowsVisible ? 1 : 0);
+    gl.uniform1i(meshProgram.uniforms.uShadows, settings.viewMode === "solid" ? 0 : settings.shadowsVisible ? 1 : 0);
     gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, [0.62, 0.72, 0.95]);
-    gl.uniform1f(meshProgram.uniforms.uOpacity, 1);
+    gl.uniform1f(meshProgram.uniforms.uOpacity, settings.viewMode === "x-ray" ? 0.22 : 1);
     gl.uniform1i(meshProgram.uniforms.uSectionEnabled, section ? 1 : 0);
     gl.uniform3fv(meshProgram.uniforms.uSectionPoint, section?.point ?? [0, 0, 0]);
     gl.uniform3fv(meshProgram.uniforms.uSectionNormal, section?.normal ?? [0, 0, 1]);
     gl.drawElements(gl.TRIANGLES, record.indexCount, record.indexType, 0);
 
-    if (settings.edgesVisible || objectSelected) {
+    if (settings.viewMode !== "solid" && (settings.edgesVisible || objectSelected)) {
       const { edgeProgram } = this;
       gl.useProgram(edgeProgram.program);
       this.resetVertexAttributes();
@@ -658,6 +658,13 @@ export class Renderer {
     this.drawGrid(product, project.settings.gridVisible, appearance);
 
     const section = project.settings.section?.enabled ? project.settings.section : null;
+    const xray = project.settings.viewMode === "x-ray";
+    if (xray) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.disable(gl.DEPTH_TEST);
+    }
     for (const entity of allRenderableEntities(project)) {
       const model = entityWorldMatrix(project, entity);
       if (entity.kind === "mesh") {
@@ -666,9 +673,14 @@ export class Renderer {
           ? componentSelection.components.filter((component) => component.entityId === entity.id)
           : componentSelection?.entityId === entity.id ? [componentSelection] : [];
         this.drawMesh(entity, material, model, product, project.settings, selection.has(entity.id), entityComponentSelections, section);
-      } else if (entity.kind === "edge" || entity.kind === "annotation") {
+      } else if (project.settings.viewMode !== "solid" && (entity.kind === "edge" || entity.kind === "annotation")) {
         this.drawEntityLine(entity, model, product, selection.has(entity.id), appearance);
       }
+    }
+    if (xray) {
+      gl.depthMask(true);
+      gl.enable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
     }
     this.drawSection(section, product);
     if (preview?.points?.length) {

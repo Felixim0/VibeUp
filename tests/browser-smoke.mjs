@@ -142,9 +142,28 @@ try {
   if (paletteMinWidth !== "128px") {
     throw new Error(`Detached palette cannot shrink to the compact minimum width: ${paletteMinWidth}`);
   }
-  await page.locator("#attach-ribbon-button").click();
+  if (await page.locator("#reattach-tools-button").isHidden()) throw new Error("Detached tools have no top-bar reattach control.");
+  const paletteHeading = await page.locator("#floating-palette .floating-palette-group-title").first().boundingBox();
+  const paletteBeforeDrag = await page.locator("#floating-palette").boundingBox();
+  await page.mouse.move(paletteHeading.x + 20, paletteHeading.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(paletteHeading.x + 75, paletteHeading.y + 45);
+  await page.mouse.up();
+  const paletteAfterDrag = await page.locator("#floating-palette").boundingBox();
+  if (Math.abs(paletteAfterDrag.x - paletteBeforeDrag.x) < 40) throw new Error("Dragging an empty palette group heading did not reposition the palette.");
+  await page.locator("#reattach-tools-button").click();
   if (!await page.locator("#floating-palette").isHidden()) {
     throw new Error("Attaching the ribbon did not close the floating palette.");
+  }
+  await page.getByTitle("Detach tools into a floating palette").click();
+  const paletteReset = await page.locator("#floating-palette").boundingBox();
+  if (Math.abs(paletteReset.x - 26) > 1 || Math.abs(paletteReset.y - 148) > 1) throw new Error("Detaching tools again did not reset the palette position.");
+  await page.locator("#attach-ribbon-button").click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  for (const mode of ["X-ray", "Solid", "Shaded"]) {
+    const button = page.locator(`[data-view-mode='${mode.toLowerCase()}']`);
+    await button.click();
+    if (!await button.evaluate((item) => item.classList.contains("active"))) throw new Error(`${mode} view was not activated.`);
   }
   await page.getByText("Appearance", { exact: true }).click();
   await page.getByTitle("Customize theme and editor colours").click();
@@ -240,26 +259,26 @@ try {
   if (await page.locator("#selection-marquee").isHidden()) {
     throw new Error("Left-to-right marquee did not become visible while dragging.");
   }
-  const touchingMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("crossing"));
-  if (!touchingMarquee) {
-    throw new Error("Left-to-right marquee did not use touching selection styling.");
+  const containedMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("contained"));
+  if (!containedMarquee) {
+    throw new Error("Left-to-right marquee did not use containment selection styling.");
   }
   await page.mouse.up();
   const marqueeStatus = await page.locator("#status-message").textContent();
-  if (!marqueeStatus?.includes("touching entities selected")) {
-    throw new Error(`Left-to-right marquee did not select touching entities: ${marqueeStatus}`);
+  if (!marqueeStatus?.includes("contained components selected")) {
+    throw new Error(`Left-to-right marquee did not select enclosed components: ${marqueeStatus}`);
   }
   await page.mouse.move(canvasBox.x + marqueeEnd.x, canvasBox.y + marqueeEnd.y);
   await page.mouse.down();
   await page.mouse.move(canvasBox.x + marqueeStart.x, canvasBox.y + marqueeStart.y, { steps: 4 });
-  const containedMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("contained"));
-  if (!containedMarquee) {
-    throw new Error("Right-to-left marquee did not use contained selection styling.");
+  const crossingMarquee = await page.locator("#selection-marquee").evaluate((marquee) => marquee.classList.contains("crossing"));
+  if (!crossingMarquee) {
+    throw new Error("Right-to-left marquee did not use dotted crossing selection styling.");
   }
   await page.mouse.up();
   const containedStatus = await page.locator("#status-message").textContent();
-  if (!containedStatus?.includes("contained entities selected") && !containedStatus?.includes("No entities matched")) {
-    throw new Error(`Right-to-left marquee did not complete containment selection: ${containedStatus}`);
+  if (!containedStatus?.includes("crossing components selected")) {
+    throw new Error(`Right-to-left marquee did not complete crossing selection: ${containedStatus}`);
   }
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
   const selectionState = await page.locator("#selection-status").textContent();
@@ -304,6 +323,18 @@ try {
   if (!pushPullPreview?.includes("Click to apply")) {
     throw new Error(`Push/Pull did not produce a live preview: ${pushPullPreview}`);
   }
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.53, canvasBox.y + canvasBox.height * 0.41, { steps: 2 });
+  await page.mouse.up({ button: "middle" });
+  const afterPreviewPan = await page.locator("#status-message").textContent();
+  if (!afterPreviewPan?.includes("Click to apply")) throw new Error(`Camera pan cancelled Push/Pull preview: ${afterPreviewPan}`);
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.43);
+  await page.mouse.down({ button: "right" });
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.53, canvasBox.y + canvasBox.height * 0.43, { steps: 2 });
+  await page.mouse.up({ button: "right" });
+  const afterPreviewOrbit = await page.locator("#status-message").textContent();
+  if (!afterPreviewOrbit?.includes("Click to apply")) throw new Error(`Camera orbit cancelled Push/Pull preview: ${afterPreviewOrbit}`);
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.43);
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.43 } });
   const pushPullStatus = await page.locator("#status-message").textContent();
   if (!pushPullStatus?.includes("Applied Push/Pull")) {
@@ -316,6 +347,8 @@ try {
   if (!cancelledPushPull?.includes("Operation cancelled")) {
     throw new Error(`Escape did not cancel a Push/Pull preview: ${cancelledPushPull}`);
   }
+  await page.getByRole("button", { name: "Camera", exact: true }).click();
+  await page.getByTitle("Iso view").click();
   const componentSelection = await page.evaluate(() => {
     const selected = document.querySelector(".outliner-row.selected");
     return Boolean(selected);
@@ -421,12 +454,61 @@ try {
   await page.getByRole("button", { name: "Create New", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".outliner-row").length === 0, null, { timeout: 5000 });
   await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Line (L)").click();
+  const firstLinePoint = { x: canvasBox.x + canvasBox.width * 0.43, y: canvasBox.y + canvasBox.height * 0.54 };
+  const secondLinePoint = { x: canvasBox.x + canvasBox.width * 0.57, y: canvasBox.y + canvasBox.height * 0.54 };
+  await page.mouse.click(firstLinePoint.x, firstLinePoint.y);
+  await page.waitForTimeout(80);
+  const firstSnap = await page.locator("#snap-indicator").boundingBox();
+  await page.mouse.click(secondLinePoint.x, secondLinePoint.y);
+  await page.waitForTimeout(80);
+  const secondSnap = await page.locator("#snap-indicator").boundingBox();
+  if (!firstSnap || !secondSnap || Math.abs(secondSnap.x - firstSnap.x) < 40) throw new Error(`Line drawing did not follow the clicked endpoints: ${JSON.stringify({ firstSnap, secondSnap, status: await page.locator("#status-message").textContent() })}`);
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.locator("[data-view-mode='x-ray']").click();
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.locator("[data-ribbon='home']").getByTitle("Select and drag (Space)").click();
+  await page.mouse.move(firstLinePoint.x - 30, firstLinePoint.y - 30);
+  await page.mouse.down();
+  await page.mouse.move((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y + 30);
+  await page.mouse.up();
+  const partialLineSelection = await page.locator("#status-message").textContent();
+  if (!partialLineSelection?.includes("0 contained components")) throw new Error(`Partial left-to-right marquee selected an incomplete line: ${partialLineSelection}`);
+  await page.mouse.move(firstLinePoint.x - 35, firstLinePoint.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(secondLinePoint.x + 35, secondLinePoint.y + 35);
+  await page.mouse.up();
+  const fullLineSelection = await page.locator("#status-message").textContent();
+  if (!fullLineSelection?.includes("1 contained components")) throw new Error(`Fully enclosed line was not selected: ${fullLineSelection}`);
+  await page.mouse.move(secondLinePoint.x - 25, firstLinePoint.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(firstLinePoint.x + 25, firstLinePoint.y + 35);
+  await page.mouse.up();
+  const crossingLineSelection = await page.locator("#status-message").textContent();
+  if (!crossingLineSelection?.includes("1 crossing components")) throw new Error(`Right-to-left crossing did not select the intersected line: ${crossingLineSelection}`);
+  await page.waitForTimeout(850);
+  const lineWorkspace = await page.evaluate(async () => new Promise((resolveLine, rejectLine) => {
+    const request = indexedDB.open("vibe-up");
+    request.onerror = () => rejectLine(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction("workspace", "readonly");
+      const read = transaction.objectStore("workspace").get("autosave");
+      read.onsuccess = () => { resolveLine(read.result?.project?.entities?.find((item) => item.kind === "edge")?.points); database.close(); };
+      read.onerror = () => rejectLine(read.error);
+    };
+  }));
+  if (!lineWorkspace || lineWorkspace.length !== 6 || Math.abs(lineWorkspace[3] - lineWorkspace[0]) < 1) throw new Error("The saved line is missing or displaced from its endpoints.");
+  await page.keyboard.press("Control+N");
+  await page.getByRole("button", { name: "Create New", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".outliner-row").length === 0, null, { timeout: 5000 });
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
   await page.locator("#measurements-input").fill("25");
   await page.locator("#measurements-input").press("Enter");
   const resetStatus = await page.locator("#status-message").textContent();
   const resetRows = await page.locator(".outliner-row").count();
-  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked face before using Push/Pull")) {
+  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked planar face before using Push/Pull")) {
     throw new Error(`New project did not clear transient drawing state: ${JSON.stringify({ resetStatus, resetRows })}`);
   }
   await page.getByText("Home", { exact: true }).click();
