@@ -23,6 +23,7 @@ export class OrbitCamera {
     this.projectionType = "perspective";
     this.rotateSensitivity = 1;
     this.moveSensitivity = 1;
+    this.invertVerticalOrbit = false;
   }
 
   getPosition() {
@@ -63,7 +64,7 @@ export class OrbitCamera {
 
   orbit(deltaX, deltaY) {
     this.yaw -= deltaX * 0.008 * this.rotateSensitivity;
-    this.pitch = clampPitch(this.pitch - deltaY * 0.008 * this.rotateSensitivity);
+    this.pitch = clampPitch(this.pitch + deltaY * 0.008 * this.rotateSensitivity * (this.invertVerticalOrbit ? -1 : 1));
     this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   }
 
@@ -73,7 +74,7 @@ export class OrbitCamera {
       return;
     }
     const yawDelta = -deltaX * 0.008 * this.rotateSensitivity;
-    const pitchDelta = clampPitch(this.pitch - deltaY * 0.008 * this.rotateSensitivity) - this.pitch;
+    const pitchDelta = clampPitch(this.pitch + deltaY * 0.008 * this.rotateSensitivity * (this.invertVerticalOrbit ? -1 : 1)) - this.pitch;
     const rotate = (vector, axis, angle) => add3(
       add3(scale3(vector, Math.cos(angle)), scale3(cross3(axis, vector), Math.sin(angle))),
       scale3(axis, dot3(axis, vector) * (1 - Math.cos(angle)))
@@ -161,6 +162,7 @@ export class OrbitCamera {
     this.projectionType = "perspective";
     this.rotateSensitivity = 1;
     this.moveSensitivity = 1;
+    this.invertVerticalOrbit = false;
   }
 
   serialize() {
@@ -171,7 +173,8 @@ export class OrbitCamera {
       distance: this.distance,
       projectionType: this.projectionType,
       rotateSensitivity: this.rotateSensitivity,
-      moveSensitivity: this.moveSensitivity
+      moveSensitivity: this.moveSensitivity,
+      invertVerticalOrbit: this.invertVerticalOrbit
     };
   }
 
@@ -187,5 +190,6 @@ export class OrbitCamera {
     this.projectionType = data.projectionType === "parallel" ? "parallel" : "perspective";
     this.rotateSensitivity = Number.isFinite(data.rotateSensitivity) ? Math.max(0.1, Math.min(4, data.rotateSensitivity)) : 1;
     this.moveSensitivity = Number.isFinite(data.moveSensitivity) ? Math.max(0.1, Math.min(4, data.moveSensitivity)) : 1;
+    this.invertVerticalOrbit = data.invertVerticalOrbit === true;
   }
 }

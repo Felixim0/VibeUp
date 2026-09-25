@@ -101,7 +101,7 @@ const TOOL_CURSORS = {
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Choose All, Lines only, or Faces only. Click or drag left-to-right to enclose, right-to-left to cross. X-ray selects through faces.",
+  select: "Choose All, Lines only, or Faces only. Drag left-to-right to enclose, right-to-left to cross. Hold Control to snap only to line joins and midpoints.",
   line: "Click a start and end point. Shift locks the starting plane (green preview). A line across a face splits it. Measurements accepts an exact length.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
@@ -192,6 +192,8 @@ const app = {
   paletteOffset: { x: 26, y: 148 },
   selectionClick: null,
   snap: null,
+  lastCanvasPointer: null,
+  controlHeld: false,
   preparingPushPull: false,
   clipboard: null,
   inference: null,
@@ -926,6 +928,41 @@ const closestSnap = (rawPoint, surface, options = {}) => {
   return best;
 };
 
+const controlLineSnap = (event) => {
+  if (!app.renderMatrices) return null;
+  const pointer = getPointer(event);
+  const viewport = app.renderer.getViewport();
+  let closest = null;
+  const consider = (point, kind, entity, start, end) => {
+    const projected = projectPoint(point, viewport.width, viewport.height, app.renderMatrices.projection, app.renderMatrices.view);
+    if (!projected || projected[2] < -1 || projected[2] > 1) return;
+    const distance = Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y);
+    if (distance > 14 * app.renderer.pixelRatio || closest && closest.distance <= distance) return;
+    if (app.project.settings.viewMode !== "x-ray" && !pointVisible(point)) return;
+    closest = { point, kind, label: kind === "midpoint" ? "line midpoint" : "line join", distance, entity, start, end };
+  };
+  for (const entity of allRenderableEntities(app.project)) {
+    let points;
+    let edges;
+    if (entity.kind === "mesh") {
+      if (entity.indices.length / 3 > MAX_SNAP_MESH_TRIANGLES) continue;
+      points = meshWorldVertices(app.project, entity);
+      edges = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
+    } else if (entity.kind === "edge") {
+      points = lineWorldPoints(app.project, entity);
+      edges = Array.from({ length: Math.max(0, points.length / 3 - 1) }, (_, index) => [index, index + 1]).flat();
+    } else continue;
+    for (let index = 0; index < edges.length; index += 2) {
+      const start = points.slice(edges[index] * 3, edges[index] * 3 + 3);
+      const end = points.slice(edges[index + 1] * 3, edges[index + 1] * 3 + 3);
+      consider(start, "endpoint", entity, start, end);
+      consider(end, "endpoint", entity, start, end);
+      consider(midpoint3(start, end), "midpoint", entity, start, end);
+    }
+  }
+  return closest;
+};
+
 const resolvedSnapPoint = (event, rawPoint, surface, options = {}) => {
   if (event.ctrlKey && app.inference?.kind === "line") {
     return {
@@ -939,7 +976,7 @@ const resolvedSnapPoint = (event, rawPoint, surface, options = {}) => {
 };
 
 const updateSnapIndicator = () => {
-  const snap = app.snap;
+  const snap = app.controlHeld ? (app.lastCanvasPointer ? controlLineSnap(app.lastCanvasPointer) : null) : app.snap;
   if (!snap || !app.renderMatrices) {
     elements.snapIndicator.hidden = true;
     return;
@@ -952,7 +989,8 @@ const updateSnapIndicator = () => {
   }
   elements.snapIndicator.hidden = false;
   elements.snapIndicator.classList.toggle("inferred", snap.kind === "inference");
-  elements.snapIndicator.classList.toggle("vertex-snap", ["vertex", "endpoint", "midpoint"].includes(snap.kind));
+  elements.snapIndicator.classList.toggle("vertex-snap", !app.controlHeld && ["vertex", "endpoint", "midpoint"].includes(snap.kind));
+  elements.snapIndicator.classList.toggle("control-snap", app.controlHeld);
   elements.snapIndicator.classList.toggle("match-target", snap.kind === "match-target");
   elements.snapIndicator.style.left = `${projected[0] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.style.top = `${projected[1] / app.renderer.pixelRatio}px`;
@@ -1547,6 +1585,11 @@ const currentPreview = () => {
 };
 
 const snapHoverPoint = (event) => {
+  if (event.ctrlKey) {
+    app.snap = controlLineSnap(event);
+    if (drawingTools.has(app.activeTool)) app.hoverPoint = app.snap?.point ?? null;
+    return;
+  }
   if (app.activeTool === "select") {
     const hit = pickEntity(event, app.selectFilter === "faces");
     if (hit?.point) {
@@ -2318,7 +2361,8 @@ const normalizeCamera = (raw, label = "Camera") => {
     distance: raw.distance,
     projectionType: raw.projectionType === "parallel" ? "parallel" : "perspective",
     rotateSensitivity: Number.isFinite(raw.rotateSensitivity) ? raw.rotateSensitivity : 1,
-    moveSensitivity: Number.isFinite(raw.moveSensitivity) ? raw.moveSensitivity : 1
+    moveSensitivity: Number.isFinite(raw.moveSensitivity) ? raw.moveSensitivity : 1,
+    invertVerticalOrbit: raw.invertVerticalOrbit === true
   };
 };
 
@@ -3712,6 +3756,11 @@ const drawingSurfaceFromHit = (hit) => ({
 });
 
 const drawingPointForEvent = (event) => {
+  if (event.ctrlKey) {
+    const snap = controlLineSnap(event);
+    app.snap = snap;
+    if (snap) return { point: snap.point, surface: app.pending?.surface ?? { point: snap.point, normal: [0, 0, 1] } };
+  }
   if (app.pending?.surface) {
     const rawPoint = app.activeTool === "line"
       ? rawPointOnPlane(event, app.pending.surface.point, app.pending.surface.normal)
@@ -4038,6 +4087,7 @@ const selectFilteredClick = (event) => {
 
 const handlePointerDown = (event) => {
   elements.canvas.focus({ preventScroll: true });
+  app.lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY };
   if (event.button === 2 || event.altKey) {
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
@@ -4193,6 +4243,16 @@ const handlePointerDown = (event) => {
     return;
   }
   if (tool === "select") {
+    if (event.ctrlKey) {
+      const snap = controlLineSnap(event);
+      if (snap) {
+        if (snap.entity.kind === "mesh") setComponentSelection({ type: "edge", entityId: snap.entity.id, start: snap.start, end: snap.end, point: snap.point });
+        else setSelection([snap.entity.id], event.shiftKey ? "toggle" : "replace");
+        app.snap = snap;
+        setStatus(`${snap.label} selected.`);
+      } else if (!event.shiftKey) clearSelection();
+      return;
+    }
     if (app.selectFilter !== "all") {
       const pointer = getPointer(event);
       app.interaction = {
@@ -4264,6 +4324,7 @@ const handlePointerDown = (event) => {
 };
 
 const handlePointerMove = (event) => {
+  app.lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY };
   const pointer = getPointer(event);
   const interaction = app.interaction;
   if (!interaction) {
@@ -4693,12 +4754,15 @@ const bindInterface = () => {
   window.addEventListener("keydown", handleKeyboard);
   window.addEventListener("keydown", (event) => {
     if (event.key === "Control") {
-      lockInference();
+      app.controlHeld = true;
+      requestRender();
     }
   });
   window.addEventListener("keyup", (event) => {
     if (event.key === "Control") {
-      unlockInference();
+      app.controlHeld = false;
+      if (app.lastCanvasPointer && document.activeElement === elements.canvas && !app.interaction) snapHoverPoint({ ...app.lastCanvasPointer, ctrlKey: false });
+      requestRender();
     }
     if (event.key === "Shift") {
       app.linePlaneLocked = false;
@@ -4939,6 +5003,12 @@ const init = async () => {
       scheduleCameraAutosave();
     });
   }
+  const invertOrbit = document.querySelector("#invert-vertical-orbit");
+  invertOrbit.checked = app.camera.invertVerticalOrbit;
+  invertOrbit.addEventListener("change", () => {
+    app.camera.invertVerticalOrbit = invertOrbit.checked;
+    scheduleCameraAutosave();
+  });
   bindInterface();
   selectRibbon("home");
   setPaletteDetached(app.preferences.paletteDetached);

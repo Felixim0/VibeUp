@@ -206,6 +206,12 @@ try {
     throw new Error("Viewport has no layout box for undo verification.");
   }
   await page.getByText("Camera", { exact: true }).click();
+  const invertOrbit = page.locator("#invert-vertical-orbit");
+  await invertOrbit.check();
+  await page.waitForTimeout(900);
+  const invertedCamera = await readAutosavedCamera();
+  if (invertedCamera?.invertVerticalOrbit !== true) throw new Error("Inverted vertical orbit was not saved with the camera.");
+  await invertOrbit.uncheck();
   await page.getByTitle("Front view").click();
   await page.waitForTimeout(900);
   const cameraBeforeUndo = await readAutosavedCamera();
@@ -492,6 +498,17 @@ try {
   await page.locator("[data-view-mode='x-ray']").click();
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Select and drag (Space)").click();
+  await page.mouse.move((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y);
+  await page.keyboard.down("Control");
+  await page.waitForTimeout(60);
+  const midpointMarker = await page.locator("#snap-indicator").evaluate((node) => ({ hidden: node.hidden, label: node.title, restricted: node.classList.contains("control-snap") }));
+  if (midpointMarker.hidden || !midpointMarker.restricted || midpointMarker.label !== "line midpoint") {
+    throw new Error(`Control did not snap the selection marker to a line midpoint: ${JSON.stringify(midpointMarker)}`);
+  }
+  await page.mouse.move((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y + 90);
+  await page.waitForTimeout(60);
+  if (!await page.locator("#snap-indicator").isHidden()) throw new Error("Control left the selection marker on an arbitrary point between line joins and midpoints.");
+  await page.keyboard.up("Control");
   await page.mouse.move(firstLinePoint.x - 30, firstLinePoint.y - 30);
   await page.mouse.down();
   await page.mouse.move((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y + 30);

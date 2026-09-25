@@ -368,6 +368,26 @@ test("grab-point orbit does not jump when the drag starts", () => {
   assert.ok(Math.hypot(...subtract3(camera.getPosition(), before)) < 5);
 });
 
+test("vertical orbit direction defaults to normal and can be inverted and restored", () => {
+  for (const pivot of [null, [60, 20, 0]]) {
+    const camera = new OrbitCamera();
+    const initial = camera.pitch;
+    if (pivot) camera.orbitAroundDrag(0, 10, pivot);
+    else camera.orbit(0, 10);
+    assert.ok(camera.pitch > initial, "downward dragging should raise pitch by default");
+    camera.invertVerticalOrbit = true;
+    const restored = new OrbitCamera();
+    restored.restore(camera.serialize());
+    const beforeInversion = restored.pitch;
+    if (pivot) restored.orbitAroundDrag(0, 10, pivot);
+    else restored.orbit(0, 10);
+    assert.ok(restored.pitch < beforeInversion, "inverted downward dragging should lower pitch");
+    assert.equal(restored.invertVerticalOrbit, true);
+    restored.reset();
+    assert.equal(restored.invertVerticalOrbit, false);
+  }
+});
+
 test("deleting a selected mesh face preserves the remaining faces", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(20, 20, 20));
@@ -416,7 +436,7 @@ test("zoom becomes less sensitive near the model", () => {
 test("orbit clamps at the top pole to keep the camera upright", () => {
   const camera = new OrbitCamera();
   camera.pitch = Math.PI / 2 - 0.01;
-  camera.orbit(0, -10);
+  camera.orbit(0, 10);
   assert.ok(camera.pitch < Math.PI / 2);
   assert.ok(camera.pitch > Math.PI / 2 - 0.001);
   const position = camera.getPosition();
@@ -428,7 +448,7 @@ test("orbit clamps at the top pole to keep the camera upright", () => {
 test("orbit clamps at the bottom pole to keep the camera upright", () => {
   const camera = new OrbitCamera();
   camera.pitch = -Math.PI / 2 + 0.01;
-  camera.orbit(0, 10);
+  camera.orbit(0, -10);
   assert.ok(camera.pitch > -Math.PI / 2);
   assert.ok(camera.pitch < -Math.PI / 2 + 0.001);
   const { projection, view } = camera.getMatrices(1.5);

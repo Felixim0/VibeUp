@@ -27,6 +27,8 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - A new line that closes a coplanar loop of existing lines creates a selectable planar face. Hover the starting point to close the current loop.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
 - **Camera sensitivity.** Adjust Rotate and Move sliders on the Camera ribbon; preferences persist with the workspace and saved project.
+- **Vertical orbit direction.** Use **Invert vertical orbit** on the Camera ribbon to reverse up/down camera rotation; the setting persists with the camera.
+- Hold `Control` to restrict the selection marker to line joins and midpoints. It disappears when neither is within snapping range.
 - `Ctrl/Cmd+C` and `Ctrl/Cmd+V` copy and paste the selected model entities, face, or edge with an offset.
 - **Inference locking.** While drawing, hold `Control` when hovering an inferred edge or face axis to lock the point to that straight line. Release `Control` to unlock.
 - **Grab-point orbit and rotation.** Orbit pivots around the model point where orbit begins. Rotate uses the exact grabbed face or edge point as its rotation pivot, then uses a second point as the reference ray. `Escape` cancels.
