@@ -99,7 +99,7 @@ const TOOL_CURSORS = {
   scale: "nwse-resize"
 };
 const TOOL_HINTS = {
-  select: "Click a face, edge, or line; triple-click for the entire model. Drag left-to-right to enclose lines and bounded faces; right-to-left to cross lines and faces. X-ray selects through faces.",
+  select: "Choose All, Lines only, or Faces only. Click or drag left-to-right to enclose, right-to-left to cross. X-ray selects through faces.",
   line: "Click a start and end point. Shift locks the starting plane (green preview). A line across a face splits it. Measurements accepts an exact length.",
   rectangle: "Click two opposite corners. Type width, depth in Measurements for exact dimensions.",
   circle: "Click the centre, then the circumference. Set segments from the circle button menu or type radius, segments in Measurements.",
@@ -168,6 +168,7 @@ const app = {
   selection: new Set(),
   selectionOrder: [],
   activeTool: "select",
+  selectFilter: "all",
   activeMaterialId: "material-default",
   interaction: null,
   pending: null,
@@ -501,6 +502,16 @@ const setSelection = (ids, mode = "replace") => {
 
 const clearSelection = () => setSelection([]);
 
+const setSelectFilter = (filter) => {
+  if (!["all", "lines", "faces"].includes(filter)) return;
+  app.selectFilter = filter;
+  clearSelection();
+  app.selectionClick = null;
+  setTool("select");
+  document.querySelectorAll("[data-select-filter]").forEach((button) => button.classList.toggle("active", button.dataset.selectFilter === filter));
+  setStatus(`${filter === "all" ? "All geometry" : filter === "lines" ? "Lines only" : "Faces only"} selection active.`);
+};
+
 const selectAllInContext = () => {
   const focus = currentSelection()[0] ?? null;
   let ids = app.project.roots;
@@ -689,19 +700,22 @@ const marqueeSelect = (start, current, mode = "replace") => {
     if (!projected || !rectsOverlap(bounds, projected)) {
       continue;
     }
-    if (entity.kind === "edge" || entity.kind === "annotation") {
+    if ((entity.kind === "edge" || entity.kind === "annotation") && app.selectFilter !== "faces") {
       const points = lineWorldPoints(app.project, entity);
       const matches = [];
       for (let index = 0; index + 5 < points.length; index += 3) matches.push(marqueeSegment(bounds, points.slice(index, index + 3), points.slice(index + 3, index + 6), contained, meshes));
       if (matches.length && (contained ? matches.every(Boolean) : matches.some(Boolean))) components.push(lineComponent(entity));
     } else if (entity.kind === "mesh") {
       const world = worldById.get(entity.id) ?? meshWorldVertices(app.project, entity);
-      const edges = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
-      for (let index = 0; index < edges.length; index += 2) {
-        const a = world.slice(edges[index] * 3, edges[index] * 3 + 3);
-        const b = world.slice(edges[index + 1] * 3, edges[index + 1] * 3 + 3);
-        if (marqueeSegment(bounds, a, b, contained, meshes)) components.push({ type: "edge", entityId: entity.id, start: a, end: b });
+      if (app.selectFilter !== "faces") {
+        const edges = edgeIndicesForMesh(entity.vertices, entity.indices, entity.metadata?.seams);
+        for (let index = 0; index < edges.length; index += 2) {
+          const a = world.slice(edges[index] * 3, edges[index] * 3 + 3);
+          const b = world.slice(edges[index + 1] * 3, edges[index + 1] * 3 + 3);
+          if (marqueeSegment(bounds, a, b, contained, meshes)) components.push({ type: "edge", entityId: entity.id, start: a, end: b });
+        }
       }
+      if (app.selectFilter === "lines") continue;
       const visited = new Set();
       for (let triangleIndex = 0; triangleIndex < entity.indices.length / 3; triangleIndex += 1) {
         if (visited.has(triangleIndex)) continue;
@@ -1029,7 +1043,7 @@ const pickEdge = (event) => {
   return closest;
 };
 
-const pickEntity = (event) => {
+const pickEntity = (event, meshesOnly = false) => {
   const ray = getRay(event);
   if (!ray) {
     return null;
@@ -1067,7 +1081,7 @@ const pickEntity = (event) => {
       }
     }
   }
-  const edge = pickEdge(event);
+  const edge = meshesOnly ? null : pickEdge(event);
   return edge && (app.project.settings.viewMode === "x-ray" || !closest || edge.rayDistance <= closest.distance + 0.01) ? edge : closest;
 };
 
@@ -1354,15 +1368,28 @@ const connectedComponents = (seed) => {
 };
 
 const selectComponentByClickCount = (event, hit, clickCount = 1) => {
-  const seed = componentFromHit(event, hit, clickCount >= 2);
-  if (!seed) {
-    setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
-    return;
-  }
-  if (clickCount >= 3) {
+  if (clickCount >= 3 && app.selectFilter === "all") {
     const ids = app.project.entities.filter((entity) => entity.kind !== "group" && isEntityVisible(app.project, entity)).map((entity) => entity.id);
     setSelection(ids);
     setStatus(`Entire model selected (${ids.length} items).`);
+    return;
+  }
+  if (app.selectFilter === "faces" && hit.entity.kind !== "mesh") return;
+  if (app.selectFilter === "lines" && hit.entity.kind !== "mesh") {
+    setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
+    setStatus("Line selected.");
+    return;
+  }
+  let seed;
+  if (app.selectFilter === "faces" && hit.entity.kind === "mesh" && !hit.coarse) {
+    const face = getMeshFaceRegion(app.project, hit.entity, hit.triangleIndex);
+    seed = face ? faceComponent(hit.entity, face, hit.point) : null;
+  } else {
+    seed = componentFromHit(event, hit, clickCount >= 2 && app.selectFilter === "all");
+  }
+  if (app.selectFilter === "lines" && seed?.type === "face") return;
+  if (!seed) {
+    setSelection([hit.entity.id], event.shiftKey ? "toggle" : "replace");
     return;
   }
   if (seed.type === "line") {
@@ -1499,16 +1526,19 @@ const currentPreview = () => {
 
 const snapHoverPoint = (event) => {
   if (app.activeTool === "select") {
-    const hit = pickEntity(event);
+    const hit = pickEntity(event, app.selectFilter === "faces");
     if (hit?.point) {
-      const meshEdge = hit.entity.kind === "mesh" ? pickVisibleMeshEdge(event, hit.entity) : pickVisibleMeshEdge(event);
+      const meshEdge = app.selectFilter !== "faces" ? pickVisibleMeshEdge(event, hit.entity.kind === "mesh" && app.project.settings.viewMode !== "x-ray" ? hit.entity : null) : null;
       if (meshEdge && (app.project.settings.viewMode === "x-ray" || pointVisible(meshEdge.point))) {
         app.snap = { point: meshEdge.point, kind: "edge", label: "on edge", line: { start: meshEdge.start, end: meshEdge.end }, surface: drawingSurfaceFromHit(hit) };
-      } else if (hit.entity.kind === "edge" || hit.entity.kind === "annotation") {
+      } else if (app.selectFilter !== "faces" && (hit.entity.kind === "edge" || hit.entity.kind === "annotation")) {
         app.snap = { point: hit.point, kind: "edge", label: "on line", line: { start: hit.start, end: hit.end }, surface: drawingSurfaceFromHit(hit) };
+      } else if (app.selectFilter === "lines") {
+        app.snap = null;
       } else {
         const surface = drawingSurfaceFromHit(hit);
-        app.snap = closestSnap(hit.point, surface, { tolerance: snapTolerance() * 1.4 }) ?? { point: hit.point, kind: "face", label: "select face", surface };
+        app.snap = app.selectFilter === "faces" ? { point: hit.point, kind: "face", label: "select face", surface }
+          : closestSnap(hit.point, surface, { tolerance: snapTolerance() * 1.4 }) ?? { point: hit.point, kind: "face", label: "select face", surface };
       }
     } else {
       app.snap = null;
@@ -1595,6 +1625,8 @@ const populateFloatingPalette = () => {
       button.addEventListener("click", () => {
         if (button.dataset.viewMode) {
           setViewMode(button.dataset.viewMode);
+        } else if (button.dataset.selectFilter) {
+          setSelectFilter(button.dataset.selectFilter);
         } else if (button.dataset.tool) {
           setTool(button.dataset.tool);
         } else if (button.dataset.action) {
@@ -3919,6 +3951,36 @@ const selectionClickCount = (pointer) => {
   return count;
 };
 
+const selectFilteredClick = (event) => {
+  const clickCount = selectionClickCount(getPointer(event));
+  if (app.selectFilter === "faces") {
+    const hit = pickEntity(event, true);
+    if (hit?.entity.kind === "mesh" && !hit.coarse) {
+      selectComponentByClickCount(event, hit, clickCount);
+      return;
+    }
+  } else {
+    const line = pickEdge(event);
+    const edge = pickVisibleMeshEdge(event);
+    if (clickCount >= 3) {
+      const hit = line ?? (edge ? { entity: edge.entity, point: edge.point, triangleIndex: 0 } : null);
+      if (hit) selectComponentByClickCount(event, hit, clickCount);
+      return;
+    }
+    if (edge && (!line || edge.distance < line.distance)) {
+      setComponentSelection({ type: "edge", entityId: edge.entity.id, start: edge.start, end: edge.end, point: edge.point });
+      setStatus("Edge selected.");
+      return;
+    }
+    if (line) {
+      selectComponentByClickCount(event, line, clickCount);
+      return;
+    }
+  }
+  if (!event.shiftKey) clearSelection();
+  app.selectionClick = null;
+};
+
 const handlePointerDown = (event) => {
   elements.canvas.focus({ preventScroll: true });
   if (event.button === 2 || event.altKey) {
@@ -4081,6 +4143,19 @@ const handlePointerDown = (event) => {
     return;
   }
   if (tool === "select") {
+    if (app.selectFilter !== "all") {
+      const pointer = getPointer(event);
+      app.interaction = {
+        kind: "marquee",
+        pointerId: event.pointerId,
+        startPointer: pointer,
+        startCssPointer: cssPointer(event),
+        currentCssPointer: cssPointer(event),
+        mode: event.shiftKey ? "add" : "replace"
+      };
+      elements.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
     const hit = pickEntity(event);
     const meshEdge = pickVisibleMeshEdge(event, app.project.settings.viewMode === "x-ray" ? null : hit?.entity.kind === "mesh" ? hit.entity : null);
     const pointer = getPointer(event);
@@ -4311,7 +4386,10 @@ const handlePointerUp = (event) => {
     app.interaction = null;
     hideSelectionMarquee();
     if (pointerMovement(getPointer(event), interaction.startPointer) > 2) {
+      app.selectionClick = null;
       marqueeSelect(interaction.startCssPointer, cssPointer(event), interaction.mode);
+    } else if (app.selectFilter !== "all") {
+      selectFilteredClick(event);
     } else if (!event.shiftKey) {
       clearSelection();
     }
@@ -4488,6 +4566,7 @@ const executeAction = (action) => {
 
 const bindInterface = () => {
   document.querySelectorAll("[data-view-mode]").forEach((button) => button.addEventListener("click", () => setViewMode(button.dataset.viewMode)));
+  document.querySelectorAll("[data-select-filter]").forEach((button) => button.addEventListener("click", () => setSelectFilter(button.dataset.selectFilter)));
   document.querySelectorAll(".menu-button").forEach((button) => button.addEventListener("click", () => selectRibbon(button.dataset.menu)));
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => executeAction(button.dataset.action)));
   document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));

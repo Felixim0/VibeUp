@@ -13,6 +13,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 ## Core workflow
 
 - **Select is component-aware.** Click once to select a face, edge, or line; double-click a face to include its boundary edges; triple-click to select the entire visible model. Dragging a selected object moves it on the clicked face plane.
+- **Selection filters.** Choose **All**, **Lines only**, or **Faces only** beside Select on Home or Tools (also available in the floating palette). The filter applies to both clicks and directional box selection; switching filters clears the old selection.
 - **Directional box selection.** Drag left-to-right to select only fully enclosed lines and faces whose boundary lines are enclosed. Drag right-to-left for a dotted box that selects crossing lines and intersecting face regions. Hidden components are selectable through faces in X-ray only. `Ctrl/Cmd+A` selects all visible model items or items in the current group.
 - **Tool-aware mouse cursor.** The pointer visibly changes for Select, Move, Rotate, drawing, measuring, Paint, Eraser, Orbit, Pan, and Zoom. Non-Select cursor art sits down-left of the exact snap point so it never hides the inference marker.
 - Push/Pull uses its own extrusion cursor rather than the drawing-pencil cursor.

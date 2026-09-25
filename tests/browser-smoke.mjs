@@ -280,6 +280,22 @@ try {
   if (!containedStatus?.includes("crossing components selected")) {
     throw new Error(`Right-to-left marquee did not complete crossing selection: ${containedStatus}`);
   }
+  await page.locator("[data-ribbon='tools'] [data-select-filter='faces']").click();
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  if (!((await page.locator("#selection-status").textContent()) ?? "").includes("face selected")) {
+    throw new Error("Faces-only click did not select the face of the box.");
+  }
+  await page.locator("[data-ribbon='tools'] [data-select-filter='lines']").click();
+  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  if (!((await page.locator("#selection-status").textContent()) ?? "").includes("No selection")) {
+    throw new Error("Lines-only click selected the interior of a face.");
+  }
+  if (!await page.locator("[data-ribbon='tools'] [data-select-filter='lines']").evaluate((button) => button.classList.contains("active")) ||
+      !await page.locator("[data-ribbon='home'] [data-select-filter='lines']").evaluate((button) => button.classList.contains("active"))) {
+    throw new Error("Selection filter buttons are out of sync across the ribbons.");
+  }
+  await page.locator("[data-ribbon='tools'] [data-select-filter='all']").click();
+  await page.waitForTimeout(550);
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
   const selectionState = await page.locator("#selection-status").textContent();
   if (!selectionState?.includes("selected")) {
@@ -486,6 +502,23 @@ try {
   await page.mouse.up();
   const crossingLineSelection = await page.locator("#status-message").textContent();
   if (!crossingLineSelection?.includes("1 crossing components")) throw new Error(`Right-to-left crossing did not select the intersected line: ${crossingLineSelection}`);
+  await page.locator("[data-ribbon='home'] [data-select-filter='faces']").click();
+  await page.mouse.move(secondLinePoint.x - 25, firstLinePoint.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(firstLinePoint.x + 25, firstLinePoint.y + 35);
+  await page.mouse.up();
+  if (!((await page.locator("#status-message").textContent()) ?? "").includes("0 crossing components")) {
+    throw new Error("Faces-only marquee selected a standalone line.");
+  }
+  await page.locator("[data-ribbon='home'] [data-select-filter='lines']").click();
+  await page.mouse.move(secondLinePoint.x - 25, firstLinePoint.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(firstLinePoint.x + 25, firstLinePoint.y + 35);
+  await page.mouse.up();
+  if (!((await page.locator("#status-message").textContent()) ?? "").includes("1 crossing components")) {
+    throw new Error("Lines-only marquee missed the standalone line.");
+  }
+  await page.locator("[data-ribbon='home'] [data-select-filter='all']").click();
   await page.waitForTimeout(850);
   const lineWorkspace = await page.evaluate(async () => new Promise((resolveLine, rejectLine) => {
     const request = indexedDB.open("vibe-up");

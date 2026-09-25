@@ -1,4 +1,4 @@
-const CACHE_NAME = "vibe-up-static-v18";
+const CACHE_NAME = "vibe-up-static-v19";
 const CACHE_PREFIX = "vibe-up-static-";
 const APP_SHELL = [
   "./",
