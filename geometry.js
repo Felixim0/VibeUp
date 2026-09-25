@@ -792,6 +792,58 @@ export const createProfileEntity = (points, name = "Face", normal = null) => {
   });
 };
 
+// A newly drawn segment can complete a polygon of existing, coplanar line entities.
+// Walk only simple cycles containing the new segment, preferring the smallest face.
+export const closedLineFace = (project, start, end, normal = [0, 0, 1]) => {
+  const direction = normalize3(normal);
+  if (Math.hypot(...direction) < EPSILON) return null;
+  const origin = start;
+  const segments = [];
+  for (const entity of project.entities) {
+    if (entity.kind !== "edge" || !isEntityVisible(project, entity) || entity.points.length !== 6) continue;
+    const points = lineWorldPoints(project, entity);
+    const first = points.slice(0, 3);
+    const second = points.slice(3, 6);
+    if (Math.abs(dot3(direction, subtract3(first, origin))) > 0.001 || Math.abs(dot3(direction, subtract3(second, origin))) > 0.001) continue;
+    if (distance3(first, start) < 0.001 && distance3(second, end) < 0.001 || distance3(first, end) < 0.001 && distance3(second, start) < 0.001) continue;
+    segments.push({ first, second });
+  }
+  const key = (point) => point.map((value) => Math.round(value * 1000)).join(":");
+  const adjacency = new Map();
+  for (const segment of segments) {
+    for (const [point, next] of [[segment.first, segment.second], [segment.second, segment.first]]) {
+      const neighbours = adjacency.get(key(point)) ?? [];
+      neighbours.push({ point: next });
+      adjacency.set(key(point), neighbours);
+    }
+  }
+  const target = key(start);
+  const paths = [[end]];
+  let best = null;
+  let examined = 0;
+  while (paths.length) {
+    if (++examined > 5000) break;
+    const path = paths.pop();
+    if (path.length > 128) continue;
+    for (const neighbour of adjacency.get(key(path[path.length - 1])) ?? []) {
+      if (key(neighbour.point) === target && path.length >= 2) {
+        const ring = [start, ...path];
+        try {
+          const face = createProfileEntity(ring.flat(), "Face", direction);
+          if (!best || faceArea(ring, direction) < best.area) best = { face, area: faceArea(ring, direction) };
+        } catch {
+          // Paths that cross themselves or collapse do not make a face.
+        }
+      } else if (!path.some((point) => key(point) === key(neighbour.point))) {
+        paths.push([...path, neighbour.point]);
+      }
+    }
+  }
+  return best?.face ?? null;
+};
+
+const faceArea = (ring, normal) => Math.abs(signedProfileArea(profilePlaneCoordinates(ring.flat(), normal)));
+
 export const planeBasis = (normal) => {
   const resolvedNormal = normalize3(normal);
   const reference = Math.abs(resolvedNormal[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
@@ -1392,6 +1444,31 @@ export const indentMeshFaceWithProfile = (project, entity, face, profile, distan
   entity.metadata = { ...entity.metadata, planar: false, primitive: "edited-mesh" };
   delete entity.metadata.seams;
   return entity;
+};
+
+export const profileHostFace = (project, profile) => {
+  if (profile?.kind !== "mesh" || !profile.metadata?.planar || !Array.isArray(profile.metadata.profilePoints) || !Array.isArray(profile.metadata.profileNormal)) return null;
+  const profileWorld = transformedProfilePoints(project, profile);
+  const profilePoint = profileWorld.slice(0, 3);
+  const profileWorldNormal = normalize3(transformDirection(entityWorldMatrix(project, profile), profile.metadata.profileNormal));
+  for (const host of project.entities) {
+    if (host.id === profile.id || host.kind !== "mesh" || host.metadata?.planar || host.locked || !isEntityVisible(project, host) || host.indices.length / 3 > 20000) continue;
+    const visited = new Set();
+    const world = meshWorldVertices(project, host);
+    for (let index = 0; index < host.indices.length / 3; index += 1) {
+      if (visited.has(index)) continue;
+      const triangle = host.indices.slice(index * 3, index * 3 + 3).map((vertexIndex) => localPointAt(world, vertexIndex));
+      const normal = normalize3(cross3(subtract3(triangle[1], triangle[0]), subtract3(triangle[2], triangle[0])));
+      if (Math.abs(dot3(normal, profileWorldNormal)) < 0.9999) continue;
+      if (Math.abs(dot3(normal, subtract3(profilePoint, triangle[0]))) > 0.001) continue;
+      const face = getMeshFaceRegion(project, host, index);
+      if (!face) continue;
+      face.triangleIndices.forEach((triangle) => visited.add(triangle));
+      const cut = faceProfileHoles(project, host, face).find((candidate) => candidate.entityId === profile.id);
+      if (cut) return { host, face, cut };
+    }
+  }
+  return null;
 };
 
 export const meshWorldTriangleIterator = function* (project, entity) {

@@ -8,6 +8,7 @@ import {
   allRenderableEntities,
   annotationWorldPoints,
   cloneEntityTree,
+  closedLineFace,
   createAnnotationEntity,
   createBoxEntity,
   createCircleEntity,
@@ -41,6 +42,7 @@ import {
   newId,
   offsetProfile,
   planeBasis,
+  profileHostFace,
   projectBounds,
   removeEntity,
   removeMeshEdgeFaces,
@@ -158,7 +160,9 @@ const elements = {
   floatingPaletteTitle: document.querySelector("#floating-palette-title"),
   floatingPaletteTools: document.querySelector("#floating-palette-tools"),
   selectionMarquee: document.querySelector("#selection-marquee"),
-  snapIndicator: document.querySelector("#snap-indicator")
+  snapIndicator: document.querySelector("#snap-indicator"),
+  viewportBusy: document.querySelector("#viewport-busy"),
+  viewportBusyLabel: document.querySelector("#viewport-busy-label")
 };
 
 const app = {
@@ -188,6 +192,7 @@ const app = {
   paletteOffset: { x: 26, y: 148 },
   selectionClick: null,
   snap: null,
+  preparingPushPull: false,
   clipboard: null,
   inference: null,
   preferences: {
@@ -296,6 +301,19 @@ const setStatus = (message, tone = "normal") => {
   elements.statusMessage.dataset.tone = tone;
 };
 
+const showGeometryBusy = (label = "Working on geometry…") => {
+  elements.viewportBusyLabel.textContent = label;
+  elements.viewportBusy.hidden = false;
+};
+
+const hideGeometryBusy = () => { elements.viewportBusy.hidden = true; };
+
+const afterBusyPaint = (action) => new Promise((resolve, reject) => {
+  window.requestAnimationFrame(() => window.setTimeout(() => {
+    try { resolve(action()); } catch (error) { reject(error); }
+  }, 0));
+});
+
 const formatNumber = (value, decimals = 3) => {
   if (!Number.isFinite(value)) {
     return "0";
@@ -375,6 +393,8 @@ const snapshot = () => ({
 const resetTransientToolState = () => {
   app.pending = null;
   app.interaction = null;
+  app.preparingPushPull = false;
+  hideGeometryBusy();
   app.hoverPoint = null;
   elements.measurements.value = "";
 };
@@ -933,6 +953,7 @@ const updateSnapIndicator = () => {
   elements.snapIndicator.hidden = false;
   elements.snapIndicator.classList.toggle("inferred", snap.kind === "inference");
   elements.snapIndicator.classList.toggle("vertex-snap", ["vertex", "endpoint", "midpoint"].includes(snap.kind));
+  elements.snapIndicator.classList.toggle("match-target", snap.kind === "match-target");
   elements.snapIndicator.style.left = `${projected[0] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.style.top = `${projected[1] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.title = snap.label;
@@ -1076,7 +1097,8 @@ const pickEntity = (event, meshesOnly = false) => {
         [vertices[b], vertices[b + 1], vertices[b + 2]],
         [vertices[c], vertices[c + 1], vertices[c + 2]]
       );
-      if (hit && (!closest || hit.distance <= closest.distance + 0.00001)) {
+      if (hit && (!closest || hit.distance < closest.distance - 0.00001 ||
+        Math.abs(hit.distance - closest.distance) <= 0.00001 && entity.metadata?.planar && !closest.entity.metadata?.planar)) {
         closest = { entity, ...hit, triangleIndex: index / 3, coarse: false };
       }
     }
@@ -3118,7 +3140,13 @@ const createLine = (start, end, surface = null) => {
         return host;
       }
     }
-    return addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] }));
+    const line = addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] }));
+    const face = closedLineFace(app.project, start, end, surface?.normal ?? [0, 0, 1]);
+    if (face) {
+      addEntity(app.project, face);
+      return face;
+    }
+    return line;
   });
 };
 
@@ -3208,26 +3236,16 @@ const applyPushPull = (height) => {
     if (!entity || entity.locked) {
       throw new Error("Select an unlocked face before using Push/Pull.");
     }
-    if (entity.metadata?.planar && height < 0) {
-      const host = app.project.entities.find((candidate) => {
-        if (candidate.id === entity.id || candidate.kind !== "mesh" || candidate.metadata?.planar || candidate.locked) return false;
-        for (let index = 0; index < candidate.indices.length / 3; index += 1) {
-          const face = getMeshFaceRegion(app.project, candidate, index);
-          if (faceProfileHoles(app.project, candidate, face).some((hole) => hole.entityId === entity.id)) return true;
-        }
-        return false;
+    if (entity.metadata?.planar) {
+      const hostFace = profileHostFace(app.project, entity);
+      if (hostFace && height < 0) return mutate("Indent face", () => {
+        indentMeshFaceWithProfile(app.project, hostFace.host, hostFace.face, hostFace.cut, height);
+        removeEntity(app.project, entity.id);
+        app.renderer.invalidate();
       });
-      if (host) return mutate("Indent face", () => {
-        for (let index = 0; index < host.indices.length / 3; index += 1) {
-          const face = getMeshFaceRegion(app.project, host, index);
-          const hole = faceProfileHoles(app.project, host, face).find((item) => item.entityId === entity.id);
-          if (hole) {
-            indentMeshFaceWithProfile(app.project, host, face, hole, height);
-            removeEntity(app.project, entity.id);
-            app.renderer.invalidate();
-            return;
-          }
-        }
+      if (hostFace) return mutate("Push/Pull profile", () => {
+        extrudeProfile(entity, height);
+        app.renderer.invalidate(entity.id);
       });
     }
     if (entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal) {
@@ -3259,6 +3277,19 @@ const applyPushPull = (height) => {
   const face = currentSelection().find((entity) => entity.kind === "mesh" && entity.metadata?.planar && !entity.locked);
   if (!face) {
     throw new Error("Select an unlocked planar face before using Push/Pull.");
+  }
+  const hostFace = profileHostFace(app.project, face);
+  if (hostFace && height < 0) return mutate("Indent face", () => {
+    indentMeshFaceWithProfile(app.project, hostFace.host, hostFace.face, hostFace.cut, height);
+    removeEntity(app.project, face.id);
+    app.renderer.invalidate();
+  });
+  if (hostFace) return mutate("Push/Pull profile", () => {
+    extrudeProfile(face, height);
+    app.renderer.invalidate(face.id);
+  });
+  if (face.metadata?.radius && face.metadata?.profilePoints && face.metadata?.profileNormal) {
+    return applyCirclePushPull(face, height);
   }
   return mutate("Push/Pull", () => {
     const holes = nestedProfileHoles(app.project, face);
@@ -3297,12 +3328,14 @@ const pushPullHeightForPointer = (interaction, pointer) => {
 
 const pushPullHeightFromHit = (interaction, event) => {
   const hit = pickEntity(event);
-  if (!hit?.point || hit.entity.id === interaction.entityId || hit.entity.id === interaction.hostIndent?.entityId) return null;
+  const edge = hit?.entity.kind === "mesh" ? pickVisibleMeshEdge(event, hit.entity) : null;
+  const point = edge?.point ?? hit?.point;
+  if (!point || hit?.entity.id === interaction.entityId && !edge) return null;
+  if (hit?.entity.id === interaction.hostIndent?.entityId && !edge) return null;
   const normal = interaction.component.normal;
-  const distance = dot3(subtract3(hit.point, interaction.component.point), normal);
-  if (!Number.isFinite(distance) || Math.abs(distance) < 0.0001) return null;
-  if (hit.entity.kind === "edge" || hit.entity.kind === "mesh") return distance;
-  return null;
+  const distance = dot3(subtract3(point, interaction.component.point), normal);
+  if (!Number.isFinite(distance)) return null;
+  return { point, height: distance, label: edge ? "match edge" : hit?.entity.kind === "edge" ? "match line" : "match face" };
 };
 
 const restorePushPullPreview = (interaction) => {
@@ -3337,10 +3370,11 @@ const previewCirclePushPull = (circle, component) => {
     app.renderer.invalidate();
     return hole;
   }
-  throw new Error("This circular face must lie fully on an unlocked axis-aligned Box face to create a through-hole.");
+  throw new Error("Draw a closed face entirely inside the host surface, then Push/Pull inward to cut a recess.");
 };
 
 const updatePushPullPreview = (interaction, height) => {
+  if (interaction.height === height) return;
   restorePushPullPreview(interaction);
   interaction.height = height;
   if (Math.abs(height) < 0.0001) {
@@ -3356,7 +3390,7 @@ const updatePushPullPreview = (interaction, height) => {
     if (interaction.hostIndent && height < 0) {
       const host = getEntity(app.project, interaction.hostIndent.entityId);
       const face = getMeshFaceRegion(app.project, host, interaction.hostIndent.triangleIndex);
-      const hole = faceProfileHoles(app.project, host, face).find((item) => item.entityId === entity.id);
+      const hole = interaction.hostIndent.cut;
       if (!hole) throw new Error("The cut is no longer on the host face.");
       indentMeshFaceWithProfile(app.project, host, face, hole, height);
       removeEntity(app.project, entity.id);
@@ -3367,7 +3401,7 @@ const updatePushPullPreview = (interaction, height) => {
     } else if (interaction.specialCircle && !interaction.hostIndent) {
       previewCirclePushPull(entity, interaction.component);
     } else if (entity.metadata?.planar) {
-      const holes = nestedProfileHoles(app.project, entity);
+      const holes = interaction.hostIndent ? [] : nestedProfileHoles(app.project, entity);
       extrudeProfile(entity, height, holes.map((hole) => hole.points));
       for (const hole of holes) {
         removeEntity(app.project, hole.entityId);
@@ -3395,10 +3429,24 @@ const updatePushPullPreview = (interaction, height) => {
     restorePushPullPreview(interaction);
     setStatus(error.message || "Push/Pull preview could not be created.", "error");
   }
+  updatePanels();
   requestRender();
 };
 
-const beginPushPullPreview = (event) => {
+const beginPushPullPreview = async (event) => {
+  if (app.preparingPushPull) return;
+  app.preparingPushPull = true;
+  showGeometryBusy("Finding face and cut…");
+  try {
+    await afterBusyPaint(() => beginPushPullPreviewNow(event));
+  } finally {
+    app.preparingPushPull = false;
+    hideGeometryBusy();
+  }
+};
+
+const beginPushPullPreviewNow = (event) => {
+  if (app.activeTool !== "pushpull") return;
   const hit = pickEntity(event);
   const selectedFace = app.componentSelection?.type === "face" ? getEntity(app.project, app.componentSelection.entityId) : null;
   if (hit?.entity.kind === "mesh" && !hit.coarse && Number.isInteger(hit.triangleIndex) && !(selectedFace?.metadata?.planar && hit.entity.id !== selectedFace.id)) {
@@ -3422,20 +3470,8 @@ const beginPushPullPreview = (event) => {
     return;
   }
   const before = snapshot();
-  let hostIndent = null;
-  if (entity.metadata?.planar) {
-    for (const host of app.project.entities) {
-      if (host.id === entity.id || host.kind !== "mesh" || host.metadata?.planar || host.locked) continue;
-      for (let index = 0; index < host.indices.length / 3; index += 1) {
-        const face = getMeshFaceRegion(app.project, host, index);
-        if (face && faceProfileHoles(app.project, host, face).some((hole) => hole.entityId === entity.id)) {
-          hostIndent = { entityId: host.id, triangleIndex: index };
-          break;
-        }
-      }
-      if (hostIndent) break;
-    }
-  }
+  const hostFace = entity.metadata?.planar ? profileHostFace(app.project, entity) : null;
+  const hostIndent = hostFace ? { entityId: hostFace.host.id, triangleIndex: hostFace.face.triangleIndices[0], cut: hostFace.cut } : null;
   app.interaction = {
     kind: "pushpull-preview",
     pointerId: event.pointerId,
@@ -3446,9 +3482,10 @@ const beginPushPullPreview = (event) => {
     component: structuredClone(component),
     hostIndent,
     specialCircle: Boolean(!hostIndent && entity.metadata?.planar && entity.metadata?.radius && entity.metadata?.profilePoints && entity.metadata?.profileNormal),
-    height: 0
+    height: 0,
+    target: null
   };
-  setStatus("Push/Pull preview started. Move the pointer, then click to apply.");
+  setStatus(hostIndent ? "Cut ready. Move inward to remove volume, then click to apply." : "Push/Pull preview started. Move the pointer, then click to apply.");
   requestRender();
 };
 
@@ -3466,8 +3503,9 @@ const commitPushPullPreview = () => {
     return;
   }
   app.interaction = null;
+  app.snap = null;
   const entity = getEntity(app.project, interaction.entityId);
-  if (entity && !interaction.specialCircle) {
+  if (entity && !interaction.specialCircle && !interaction.hostIndent) {
     const triangleIndex = entity.metadata?.primitive === "extrusion" ? 1 : interaction.component.triangleIndices[0];
     const face = getMeshFaceRegion(app.project, entity, triangleIndex);
     app.componentSelection = face ? { type: "face", entityId: entity.id, ...face, point: face.point } : null;
@@ -3486,6 +3524,7 @@ const cancelPushPullPreview = () => {
   }
   restorePushPullPreview(interaction);
   app.interaction = null;
+  app.snap = null;
   updatePanels();
   requestRender();
   return true;
@@ -3521,7 +3560,7 @@ const applyCirclePushPull = (circle, height) => {
     setStatus("Cut circular through-hole through the box.");
     return hole;
   }
-  throw new Error("This circular face must lie fully on an unlocked axis-aligned Box face to create a through-hole.");
+  throw new Error("Draw a closed face entirely inside the host surface, then Push/Pull inward to cut a recess.");
 };
 
 const applyOffset = (distance) => {
@@ -3597,7 +3636,7 @@ const applyMeasurements = () => {
   try {
     const values = parseMeasurements(raw);
     const pending = app.pending;
-    if (app.activeTool === "line" && pending?.tool === "line") {
+  if (app.activeTool === "line" && pending?.tool === "line") {
       const start = pending.points[0];
       const surface = pending.surface ?? { point: [0, 0, 0], normal: [0, 0, 1] };
       const { tangent, bitangent } = planeBasis(surface.normal);
@@ -3688,6 +3727,13 @@ const drawingPointForEvent = (event) => {
     const snap = event.shiftKey && app.activeTool === "line"
       ? { point: raw, kind: "inference", label: "locked drawing plane", surface: activeSurface }
       : resolvedSnapPoint(event, raw, activeSurface);
+    if (app.activeTool === "line" && !event.shiftKey) {
+      const candidate = lineStartSnap(event, activeSurface);
+      if (candidate) {
+        app.snap = candidate;
+        return { point: candidate.point, surface: activeSurface };
+      }
+    }
     app.linePlaneLocked = event.shiftKey && app.activeTool === "line";
     app.snap = snap;
     return { point: snap.point, surface: app.pending.surface };
@@ -3707,6 +3753,15 @@ const drawingPointForEvent = (event) => {
   const snap = resolvedSnapPoint(event, rawPoint, surface);
   app.snap = snap;
   return { point: snap.point, surface };
+};
+
+const lineStartSnap = (event, surface) => {
+  const start = app.pending?.tool === "line" ? app.pending.points[0] : null;
+  if (!start || !app.renderMatrices) return null;
+  const projected = projectPoint(start, app.renderer.width, app.renderer.height, app.renderMatrices.projection, app.renderMatrices.view);
+  const pointer = getPointer(event);
+  if (!projected || Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y) > 14 * app.renderer.pixelRatio) return null;
+  return { point: start, kind: "endpoint", label: "close loop", surface };
 };
 
 const setInferenceFromPoint = (point, surface) => {
@@ -3990,9 +4045,6 @@ const handlePointerDown = (event) => {
       app.snap = null;
     }
     const pivot = orbitPivotForEvent(event);
-    if (pivot) {
-      app.camera.orbitAround(pivot);
-    }
     const pointer = getPointer(event);
     app.interaction = { kind: "orbit", pointerId: event.pointerId, lastPointer: pointer, pivot, resumePreview: app.interaction?.kind === "pushpull-preview" ? app.interaction : null };
     elements.canvas.setPointerCapture(event.pointerId);
@@ -4001,10 +4053,11 @@ const handlePointerDown = (event) => {
   }
   if (event.button === 0 && app.activeTool === "pushpull" && app.interaction?.kind === "pushpull-preview") {
     const match = pushPullHeightFromHit(app.interaction, event);
-    if (match !== null) updatePushPullPreview(app.interaction, match);
+    if (match && Math.abs(match.height) >= 0.0001) updatePushPullPreview(app.interaction, match.height);
     commitPushPullPreview();
     return;
   }
+  if (app.preparingPushPull && event.button === 0) return;
   if (event.button === 1) {
     if (app.interaction?.kind === "rotate-guide") {
       restoreSnapshot(app.interaction.before);
@@ -4045,9 +4098,6 @@ const handlePointerDown = (event) => {
   const tool = app.activeTool;
   if (tool === "orbit" || tool === "pan" || tool === "zoom") {
     const pivot = tool === "orbit" && !event.ctrlKey ? orbitPivotForEvent(event) : null;
-    if (pivot) {
-      app.camera.orbitAround(pivot);
-    }
     const pointer = getPointer(event);
     app.interaction = { kind: tool, pointerId: event.pointerId, lastPointer: pointer, pivot };
     elements.canvas.setPointerCapture(event.pointerId);
@@ -4087,7 +4137,7 @@ const handlePointerDown = (event) => {
   }
   if (tool === "pushpull" || tool === "offset" || tool === "followme") {
     if (tool === "pushpull") {
-      beginPushPullPreview(event);
+      void beginPushPullPreview(event).catch((error) => setStatus(error.message || "Could not prepare the face.", "error"));
       return;
     }
     const component = app.componentSelection;
@@ -4253,7 +4303,7 @@ const handlePointerMove = (event) => {
     if (event.ctrlKey) {
       app.camera.pan(deltaX, deltaY, app.renderer.height);
     } else {
-      app.camera.orbit(deltaX, deltaY);
+      app.camera.orbitAroundDrag(deltaX, deltaY, interaction.pivot);
     }
     interaction.lastPointer = pointer;
     requestRender();
@@ -4337,7 +4387,17 @@ const handlePointerMove = (event) => {
     return;
   }
   if (interaction.kind === "pushpull-preview") {
-    updatePushPullPreview(interaction, pushPullHeightForPointer(interaction, pointer));
+    const match = pushPullHeightFromHit(interaction, event);
+    interaction.target = match && Math.abs(match.height) >= 0.0001 ? match : null;
+    if (interaction.target) {
+      app.snap = { point: interaction.target.point, kind: "match-target", label: interaction.target.label };
+      updatePushPullPreview(interaction, interaction.target.height);
+      app.snap = { point: interaction.target.point, kind: "match-target", label: interaction.target.label };
+      setStatus(`Push/Pull: ${formatLength(interaction.target.height)} — ${interaction.target.label}. Click to match this level.`);
+    } else {
+      app.snap = null;
+      updatePushPullPreview(interaction, pushPullHeightForPointer(interaction, pointer));
+    }
     return;
   }
   if (interaction.kind === "offset") {

@@ -333,7 +333,12 @@ try {
   if (!pushPullCursor.includes("23 0")) {
     throw new Error(`The Push/Pull cursor is not positioned down-left of the snap point: ${pushPullCursor}`);
   }
-  await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.5 } });
+  const busy = page.locator("#viewport-busy");
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+  await page.mouse.down();
+  await busy.waitFor({ state: "visible" });
+  await page.mouse.up();
+  await busy.waitFor({ state: "hidden" });
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.43, { steps: 4 });
   const pushPullPreview = await page.locator("#status-message").textContent();
   if (!pushPullPreview?.includes("Click to apply")) {
@@ -350,6 +355,9 @@ try {
   await page.mouse.up({ button: "right" });
   const afterPreviewOrbit = await page.locator("#status-message").textContent();
   if (!afterPreviewOrbit?.includes("Click to apply")) throw new Error(`Camera orbit cancelled Push/Pull preview: ${afterPreviewOrbit}`);
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.58, canvasBox.y + canvasBox.height * 0.5);
+  const matchMarker = await page.locator("#snap-indicator").evaluate((indicator) => !indicator.hidden && indicator.classList.contains("match-target"));
+  if (matchMarker && !(await page.locator("#status-message").textContent())?.includes("Click to match")) throw new Error("Push/Pull target marker has no matching guidance.");
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.43);
   await canvas.click({ position: { x: canvasBox.width * 0.5, y: canvasBox.height * 0.43 } });
   const pushPullStatus = await page.locator("#status-message").textContent();
@@ -532,6 +540,22 @@ try {
     };
   }));
   if (!lineWorkspace || lineWorkspace.length !== 6 || Math.abs(lineWorkspace[3] - lineWorkspace[0]) < 1) throw new Error("The saved line is missing or displaced from its endpoints.");
+  await page.locator("[data-ribbon='home']").getByTitle("Line (L)").click();
+  const upperRight = { x: secondLinePoint.x, y: secondLinePoint.y - 70 };
+  const upperLeft = { x: firstLinePoint.x, y: firstLinePoint.y - 70 };
+  for (const [from, to] of [[secondLinePoint, upperRight], [upperRight, upperLeft], [upperLeft, firstLinePoint]]) {
+    await page.mouse.click(from.x, from.y);
+    await page.mouse.click(to.x, to.y);
+  }
+  const closedFaceStatus = await page.locator("#selection-status").textContent();
+  if (!closedFaceStatus?.includes("Face")) throw new Error(`Closing four lines did not create a planar face: ${closedFaceStatus}`);
+  await page.locator("[data-ribbon='home']").getByTitle("Push/Pull (P)").click();
+  await page.mouse.click((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y - 35);
+  await page.locator("#viewport-busy").waitFor({ state: "hidden" });
+  await page.mouse.move((firstLinePoint.x + secondLinePoint.x) / 2, firstLinePoint.y - 70);
+  const closedFacePreview = await page.locator("#status-message").textContent();
+  if (!closedFacePreview?.includes("Push/Pull:")) throw new Error(`Closed line face could not be extruded: ${closedFacePreview}`);
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Control+N");
   await page.getByRole("button", { name: "Create New", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".outliner-row").length === 0, null, { timeout: 5000 });
@@ -541,7 +565,7 @@ try {
   await page.locator("#measurements-input").press("Enter");
   const resetStatus = await page.locator("#status-message").textContent();
   const resetRows = await page.locator(".outliner-row").count();
-  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked planar face before using Push/Pull")) {
+  if (resetRows !== 0 || !resetStatus?.includes("Select an unlocked face before using Push/Pull")) {
     throw new Error(`New project did not clear transient drawing state: ${JSON.stringify({ resetStatus, resetRows })}`);
   }
   await page.getByText("Home", { exact: true }).click();

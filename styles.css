@@ -422,6 +422,28 @@ button {
   pointer-events: none;
 }
 
+.viewport-busy {
+  position: absolute;
+  z-index: 12;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border: 1px solid #9db3b9;
+  border-radius: 8px;
+  background: #f7fafbf0;
+  color: #334550;
+  box-shadow: 0 5px 18px rgb(31 58 68 / 18%);
+  pointer-events: none;
+}
+
+.viewport-busy[hidden] { display: none; }
+.busy-spinner { width: 15px; height: 15px; border: 2px solid #b9d4d0; border-top-color: #148a78; border-radius: 50%; animation: busy-spin 0.7s linear infinite; }
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+
 .snap-indicator.vertex-snap {
   width: 19px;
   height: 19px;
@@ -444,6 +466,14 @@ button {
   border-radius: 2px;
   border-color: #1a8791;
   background: #e6fbfd;
+}
+
+.snap-indicator.match-target {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #c9a33f;
+  background: #ffe891;
+  box-shadow: 0 0 0 4px rgb(255 255 255 / 85%), 0 0 12px #bd962c;
 }
 
 .selection-marquee {

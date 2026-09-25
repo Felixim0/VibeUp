@@ -24,6 +24,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Reattach from the top bar or palette close button. Drag any non-tool area of the palette to move it; detaching again resets its position.
 - The detachable palette can remain partly offscreen when deliberately positioned there.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
+- A new line that closes a coplanar loop of existing lines creates a selectable planar face. Hover the starting point to close the current loop.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
 - **Camera sensitivity.** Adjust Rotate and Move sliders on the Camera ribbon; preferences persist with the workspace and saved project.
 - `Ctrl/Cmd+C` and `Ctrl/Cmd+V` copy and paste the selected model entities, face, or edge with an offset.
@@ -61,6 +62,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Dimensioned box and cylinder creation.
 - Push/Pull is click-move-click: click a face, inspect the live shape preview as the pointer moves, then click again to commit. Escape cancels the preview.
 - Middle-drag pans and right/Alt-drag orbits during the Push/Pull preview without cancelling it; wheel zoom remains available.
+- While previewing an extrusion, hover a face or line to show a gold matching point, then click to match that level. A busy badge appears while preparing face/cut geometry.
 - Clicking another face or line during a live Push/Pull matches its height along the selected face normal.
 - Offset planar faces and create a straight-vector Follow Me sweep.
 - Move, protractor rotate, scale, erase, paint, and reverse faces.
@@ -75,6 +77,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Grid and mesh-edge toggles, with thicker red, green, and blue world axes, restrained depth-tested committed lines, and high-visibility live drawing previews. Face back-sides are shown in blue to make reversed winding visible.
 - Wheel zoom slows proportionally as the camera approaches the model for fine positioning.
 - Orbit keeps the world Z axis upright and stops just short of top and bottom poles, preventing disorienting camera roll.
+- Grab-point orbit begins without moving the camera; the first drag rotates smoothly around the grabbed point.
 - Light theme by default plus a dark-theme option.
 - Custom workspace, grid, edge, selection colours, and edge thickness.
 - A muted gold selection accent by default, configurable from Appearance.

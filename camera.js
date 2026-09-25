@@ -1,6 +1,7 @@
 import {
   add3,
   cross3,
+  dot3,
   mat4LookAt,
   mat4Ortho,
   mat4Perspective,
@@ -64,6 +65,27 @@ export class OrbitCamera {
     this.yaw -= deltaX * 0.008 * this.rotateSensitivity;
     this.pitch = clampPitch(this.pitch - deltaY * 0.008 * this.rotateSensitivity);
     this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+  }
+
+  orbitAroundDrag(deltaX, deltaY, pivot) {
+    if (!Array.isArray(pivot) || pivot.length !== 3 || !pivot.every(Number.isFinite)) {
+      this.orbit(deltaX, deltaY);
+      return;
+    }
+    const yawDelta = -deltaX * 0.008 * this.rotateSensitivity;
+    const pitchDelta = clampPitch(this.pitch - deltaY * 0.008 * this.rotateSensitivity) - this.pitch;
+    const rotate = (vector, axis, angle) => add3(
+      add3(scale3(vector, Math.cos(angle)), scale3(cross3(axis, vector), Math.sin(angle))),
+      scale3(axis, dot3(axis, vector) * (1 - Math.cos(angle)))
+    );
+    const yawedEye = rotate(subtract3(this.getPosition(), pivot), [0, 0, 1], yawDelta);
+    const yawedTarget = rotate(subtract3(this.target, pivot), [0, 0, 1], yawDelta);
+    const right = [-Math.sin(this.yaw + yawDelta), Math.cos(this.yaw + yawDelta), 0];
+    const newEye = add3(pivot, rotate(yawedEye, right, -pitchDelta));
+    this.target = add3(pivot, rotate(yawedTarget, right, -pitchDelta));
+    const offset = subtract3(newEye, this.target);
+    this.yaw = ((Math.atan2(offset[1], offset[0]) + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    this.pitch = clampPitch(Math.asin(Math.max(-1, Math.min(1, offset[2] / this.distance))));
   }
 
   orbitAround(target) {

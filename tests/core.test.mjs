@@ -6,7 +6,9 @@ import { OrbitCamera } from "../camera.js";
 import { subtractMeshes, validateSubtractInputs } from "../csg.js";
 import {
   addEntity,
+  closedLineFace,
   createBoxEntity,
+  createEdgeEntity,
   cutCircularHoleThroughBox,
   createCircleEntity,
   createDemoProject,
@@ -28,6 +30,7 @@ import {
   meshWorldVertices,
   nestedProfileHoles,
   projectBounds,
+  profileHostFace,
   reverseMeshFaces,
   removeMeshEdgeFaces,
   removeMeshFaces,
@@ -307,6 +310,41 @@ test("a nested drawn face can indent its host without moving the outer face", ()
   assert.ok(profile);
 });
 
+test("closing coplanar line segments creates a selectable planar face", () => {
+  const project = createEmptyProject();
+  addEntity(project, createEdgeEntity({ points: [0, 0, 0, 20, 0, 0] }));
+  addEntity(project, createEdgeEntity({ points: [20, 0, 0, 20, 20, 0] }));
+  addEntity(project, createEdgeEntity({ points: [20, 20, 0, 0, 20, 0] }));
+  const face = closedLineFace(project, [0, 20, 0], [0, 0, 0]);
+  assert.equal(face?.metadata.planar, true);
+  assert.equal(face?.indices.length, 6);
+  assert.equal(closedLineFace(project, [0, 20, 5], [0, 0, 5]), null);
+});
+
+test("closed profile on an existing face can indent its host", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const profile = addEntity(project, createCircleEntity([0, 0, 40], 15, 18, "Cut", [0, 0, 1]));
+  const match = profileHostFace(project, profile);
+  assert.equal(match?.host.id, box.id);
+  indentMeshFaceWithProfile(project, box, match.face, match.cut, -12);
+  assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
+});
+
+test("a closed line-drawn face on a box can recess into the host", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const points = [[-10, -10, 40], [10, -10, 40], [10, 10, 40], [-10, 10, 40]];
+  for (let index = 0; index < 3; index += 1) {
+    addEntity(project, createEdgeEntity({ points: [...points[index], ...points[index + 1]] }));
+  }
+  const face = addEntity(project, closedLineFace(project, points[3], points[0]));
+  const host = profileHostFace(project, face);
+  assert.equal(host?.host.id, box.id);
+  indentMeshFaceWithProfile(project, box, host.face, host.cut, -8);
+  assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
+});
+
 test("camera rotation and pan sensitivity survive serialization", () => {
   const camera = new OrbitCamera();
   camera.rotateSensitivity = 2;
@@ -318,6 +356,16 @@ test("camera rotation and pan sensitivity survive serialization", () => {
   baseline.orbit(10, 0);
   assert.ok(Math.abs(restored.yaw - baseline.yaw) > 0.01);
   assert.equal(restored.moveSensitivity, 0.5);
+});
+
+test("grab-point orbit does not jump when the drag starts", () => {
+  const camera = new OrbitCamera();
+  const before = camera.getPosition();
+  camera.orbitAroundDrag(0, 0, [60, 20, 0]);
+  assert.deepEqual(camera.getPosition().map((value) => Math.round(value * 1000000)), before.map((value) => Math.round(value * 1000000)));
+  assert.deepEqual(camera.target.map((value) => Math.round(value * 1000000)), [0, 0, 25000000]);
+  camera.orbitAroundDrag(1, 0, [60, 20, 0]);
+  assert.ok(Math.hypot(...subtract3(camera.getPosition(), before)) < 5);
 });
 
 test("deleting a selected mesh face preserves the remaining faces", () => {
