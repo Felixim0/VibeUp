@@ -206,12 +206,19 @@ try {
     throw new Error("Viewport has no layout box for undo verification.");
   }
   await page.getByText("Camera", { exact: true }).click();
+  await page.locator("#zoom-sensitivity").fill("2.5");
+  await page.locator("#close-zoom-sensitivity").fill("0.5");
+  await page.waitForTimeout(900);
+  const zoomSettings = await readAutosavedCamera();
+  if (zoomSettings?.zoomSensitivity !== 2.5 || zoomSettings?.closeZoomSensitivity !== 0.5) throw new Error("Zoom sensitivity sliders did not save their camera settings.");
   const invertOrbit = page.locator("#invert-vertical-orbit");
   await invertOrbit.check();
   await page.waitForTimeout(900);
   const invertedCamera = await readAutosavedCamera();
   if (invertedCamera?.invertVerticalOrbit !== true) throw new Error("Inverted vertical orbit was not saved with the camera.");
   await invertOrbit.uncheck();
+  await page.locator("#zoom-sensitivity").fill("1");
+  await page.locator("#close-zoom-sensitivity").fill("1");
   await page.getByTitle("Front view").click();
   await page.waitForTimeout(900);
   const cameraBeforeUndo = await readAutosavedCamera();
@@ -350,6 +357,7 @@ try {
   if (!pushPullPreview?.includes("Click to apply")) {
     throw new Error(`Push/Pull did not produce a live preview: ${pushPullPreview}`);
   }
+  if (await page.locator("#extrusion-guide").isHidden()) throw new Error("Push/Pull preview did not draw the dotted guide to its extrusion marker.");
   await page.mouse.down({ button: "middle" });
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.53, canvasBox.y + canvasBox.height * 0.41, { steps: 2 });
   await page.mouse.up({ button: "middle" });

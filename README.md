@@ -27,6 +27,7 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - A new line that closes a coplanar loop of existing lines creates a selectable planar face. Hover the starting point to close the current loop.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
 - **Camera sensitivity.** Adjust Rotate and Move sliders on the Camera ribbon; preferences persist with the workspace and saved project.
+- Adjust **Zoom** for overall wheel/drag speed and **Close zoom** for how strongly zoom slows near objects (zero disables that slowdown). Both settings persist with the camera.
 - **Vertical orbit direction.** Use **Invert vertical orbit** on the Camera ribbon to reverse up/down camera rotation; the setting persists with the camera.
 - Hold `Control` to restrict the selection marker to line joins and midpoints. It disappears when neither is within snapping range.
 - `Ctrl/Cmd+C` and `Ctrl/Cmd+V` copy and paste the selected model entities, face, or edge with an offset.
@@ -61,10 +62,12 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - Push/Pull of a circular face through an axis-aligned Box produces a closed circular through-hole rather than an overlapping cylinder. Unsupported placements fail safely rather than creating an overlapping solid.
 - An outer planar profile consumes enclosed coplanar profiles as holes during Push/Pull, so a circle drawn inside a square becomes a real circular opening in the resulting solid. The same behavior indents nested profiles drawn on an existing mesh face.
 - Draw a line from one boundary edge of a face to another to split the face into two separately selectable, extrudable regions. Push a drawn closed profile into an existing host face to create a recessed cut.
+- Lines across a rectangular face can start and end inside it; they extend to its boundary and split it into independent faces. After deleting a face, drawing across its opening rebuilds two editable faces. A cut pulled through the opposite side opens the exit surface while retaining its surrounding selectable face.
 - Dimensioned box and cylinder creation.
 - Push/Pull is click-move-click: click a face, inspect the live shape preview as the pointer moves, then click again to commit. Escape cancels the preview.
 - Middle-drag pans and right/Alt-drag orbits during the Push/Pull preview without cancelling it; wheel zoom remains available.
 - While previewing an extrusion, hover a face or line to show a gold matching point, then click to match that level. A busy badge appears while preparing face/cut geometry.
+- A dotted guide joins the extrusion origin to its yellow match marker during preview.
 - Clicking another face or line during a live Push/Pull matches its height along the selected face normal.
 - Offset planar faces and create a straight-vector Follow Me sweep.
 - Move, protractor rotate, scale, erase, paint, and reverse faces.

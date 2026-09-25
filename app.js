@@ -33,6 +33,9 @@ import {
   isEntityVisible,
   lineWorldPoints,
   makeGroup,
+  meshOpeningAtPoint,
+  meshOpeningNearSegment,
+  fillMeshOpeningWithSplit,
   moveMeshFace,
   meshReport,
   meshEdgeKey,
@@ -161,6 +164,7 @@ const elements = {
   floatingPaletteTools: document.querySelector("#floating-palette-tools"),
   selectionMarquee: document.querySelector("#selection-marquee"),
   snapIndicator: document.querySelector("#snap-indicator"),
+  extrusionGuide: document.querySelector("#extrusion-guide"),
   viewportBusy: document.querySelector("#viewport-busy"),
   viewportBusyLabel: document.querySelector("#viewport-busy-label")
 };
@@ -397,6 +401,7 @@ const resetTransientToolState = () => {
   app.interaction = null;
   app.preparingPushPull = false;
   hideGeometryBusy();
+  elements.extrusionGuide.hidden = true;
   app.hoverPoint = null;
   elements.measurements.value = "";
 };
@@ -976,6 +981,29 @@ const resolvedSnapPoint = (event, rawPoint, surface, options = {}) => {
 };
 
 const updateSnapIndicator = () => {
+  const guide = elements.extrusionGuide;
+  const interaction = app.interaction?.kind === "pushpull-preview" ? app.interaction : null;
+  const target = interaction?.target ?? (interaction && Math.abs(interaction.height) > 0.0001
+    ? { point: add3(interaction.component.point, scale3(interaction.component.normal, interaction.height)) } : null);
+  const origin = interaction?.component.point;
+  if (target && origin && app.renderMatrices) {
+    const viewport = app.renderer.getViewport();
+    const project = (point) => projectPoint(point, viewport.width, viewport.height, app.renderMatrices.projection, app.renderMatrices.view);
+    const first = project(origin);
+    const second = project(target.point);
+    if (first && second && first[2] >= -1 && first[2] <= 1 && second[2] >= -1 && second[2] <= 1) {
+      const x = first[0] / app.renderer.pixelRatio;
+      const y = first[1] / app.renderer.pixelRatio;
+      const dx = second[0] / app.renderer.pixelRatio - x;
+      const dy = second[1] / app.renderer.pixelRatio - y;
+      guide.hidden = false;
+      guide.style.left = `${x}px`;
+      guide.style.top = `${y}px`;
+      guide.style.height = `${Math.hypot(dx, dy)}px`;
+      guide.style.transformOrigin = "top center";
+      guide.style.transform = `rotate(${-Math.atan2(dx, dy)}rad)`;
+    } else guide.hidden = true;
+  } else guide.hidden = true;
   const snap = app.controlHeld ? (app.lastCanvasPointer ? controlLineSnap(app.lastCanvasPointer) : null) : app.snap;
   if (!snap || !app.renderMatrices) {
     elements.snapIndicator.hidden = true;
@@ -2362,6 +2390,8 @@ const normalizeCamera = (raw, label = "Camera") => {
     projectionType: raw.projectionType === "parallel" ? "parallel" : "perspective",
     rotateSensitivity: Number.isFinite(raw.rotateSensitivity) ? raw.rotateSensitivity : 1,
     moveSensitivity: Number.isFinite(raw.moveSensitivity) ? raw.moveSensitivity : 1,
+    zoomSensitivity: Number.isFinite(raw.zoomSensitivity) ? raw.zoomSensitivity : 1,
+    closeZoomSensitivity: Number.isFinite(raw.closeZoomSensitivity) ? raw.closeZoomSensitivity : 1,
     invertVerticalOrbit: raw.invertVerticalOrbit === true
   };
 };
@@ -3177,11 +3207,19 @@ const createLine = (start, end, surface = null) => {
   }
   return mutate("Draw line", () => {
     const host = surface?.entityId ? getEntity(app.project, surface.entityId) : null;
-    if (host?.kind === "mesh" && !host.locked && Number.isInteger(surface.triangleIndex)) {
+    if (host?.kind === "mesh" && !host.locked && Number.isInteger(surface.triangleIndex) && surface.triangleIndex < host.indices.length / 3) {
       const face = getMeshFaceRegion(app.project, host, surface.triangleIndex);
       if (face && splitMeshFaceByLine(app.project, host, face, start, end)) {
         app.renderer.invalidate(host.id);
         return host;
+      }
+    }
+    for (const candidate of host ? [host] : app.project.entities) {
+      if (candidate.kind !== "mesh" || candidate.locked || candidate.indices.length / 3 > 20000) continue;
+      const opening = meshOpeningNearSegment(app.project, candidate, start, end, surface?.normal ?? [0, 0, 1]);
+      if (opening && fillMeshOpeningWithSplit(app.project, candidate, opening, start, end, surface?.normal ?? [0, 0, 1])) {
+        app.renderer.invalidate(candidate.id);
+        return candidate;
       }
     }
     const line = addEntity(app.project, createEdgeEntity({ name: "Line", points: [...start, ...end] }));
@@ -3548,6 +3586,7 @@ const commitPushPullPreview = () => {
   }
   app.interaction = null;
   app.snap = null;
+  elements.extrusionGuide.hidden = true;
   const entity = getEntity(app.project, interaction.entityId);
   if (entity && !interaction.specialCircle && !interaction.hostIndent) {
     const triangleIndex = entity.metadata?.primitive === "extrusion" ? 1 : interaction.component.triangleIndices[0];
@@ -3569,6 +3608,7 @@ const cancelPushPullPreview = () => {
   restorePushPullPreview(interaction);
   app.interaction = null;
   app.snap = null;
+  elements.extrusionGuide.hidden = true;
   updatePanels();
   requestRender();
   return true;
@@ -3680,7 +3720,7 @@ const applyMeasurements = () => {
   try {
     const values = parseMeasurements(raw);
     const pending = app.pending;
-  if (app.activeTool === "line" && pending?.tool === "line") {
+    if (app.activeTool === "line" && pending?.tool === "line") {
       const start = pending.points[0];
       const surface = pending.surface ?? { point: [0, 0, 0], normal: [0, 0, 1] };
       const { tangent, bitangent } = planeBasis(surface.normal);
@@ -3794,6 +3834,15 @@ const drawingPointForEvent = (event) => {
     app.snap = snap;
     return { point: snap.point, surface };
   }
+  const lineSurface = app.activeTool === "line" ? surfaceAtMeshOpening(event) : null;
+  if (lineSurface) {
+    const raw = rawPointOnPlane(event, lineSurface.point, lineSurface.normal);
+    if (raw) {
+      const snap = resolvedSnapPoint(event, raw, lineSurface);
+      app.snap = snap;
+      return { point: snap.point, surface: lineSurface };
+    }
+  }
   const surface = { point: [0, 0, 0], normal: [0, 0, 1] };
   const rawPoint = app.activeTool === "line" ? rawPointOnPlane(event, surface.point, surface.normal) : pointOnPlane(event, surface.point, surface.normal);
   if (!rawPoint) {
@@ -3802,6 +3851,34 @@ const drawingPointForEvent = (event) => {
   const snap = resolvedSnapPoint(event, rawPoint, surface);
   app.snap = snap;
   return { point: snap.point, surface };
+};
+
+const surfaceAtMeshOpening = (event) => {
+  const ray = getRay(event);
+  if (!ray) return null;
+  let closest = null;
+  for (const entity of allRenderableEntities(app.project)) {
+    if (entity.kind !== "mesh" || entity.indices.length / 3 > 20000) continue;
+    const bounds = entityBounds(app.project, entity);
+    if (!bounds || rayBoxDistance(ray, bounds.min, bounds.max) === null) continue;
+    const vertices = meshWorldVertices(app.project, entity);
+    for (let axis = 0; axis < 3; axis += 1) {
+      const levels = new Set();
+      for (let index = axis; index < vertices.length; index += 3) levels.add(Math.round(vertices[index] * 1000) / 1000);
+      for (const level of levels) {
+        const normal = [0, 0, 0];
+        normal[axis] = 1;
+        const planePoint = [0, 0, 0];
+        planePoint[axis] = level;
+        const point = intersectRayPlane(ray, planePoint, normal);
+        if (!point || closest && distance3(ray.origin, point) >= closest.distance) continue;
+        if (meshOpeningAtPoint(app.project, entity, point, normal)) {
+          closest = { surface: { point, normal, entityId: entity.id }, distance: distance3(ray.origin, point) };
+        }
+      }
+    }
+  }
+  return closest?.surface ?? null;
 };
 
 const lineStartSnap = (event, surface) => {
@@ -4995,7 +5072,7 @@ const init = async () => {
   await restoreAutosave();
   document.querySelectorAll("[data-view-mode]").forEach((button) => button.classList.toggle("active", button.dataset.viewMode === app.project.settings.viewMode));
   loadPreferences();
-  for (const [id, property] of [["rotate-sensitivity", "rotateSensitivity"], ["move-sensitivity", "moveSensitivity"]]) {
+  for (const [id, property] of [["rotate-sensitivity", "rotateSensitivity"], ["move-sensitivity", "moveSensitivity"], ["zoom-sensitivity", "zoomSensitivity"], ["close-zoom-sensitivity", "closeZoomSensitivity"]]) {
     const input = document.querySelector(`#${id}`);
     input.value = String(app.camera[property]);
     input.addEventListener("input", () => {

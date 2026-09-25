@@ -1240,8 +1240,7 @@ export const meshWorldVertices = (project, entity) => {
   return vertices;
 };
 
-const faceBoundaryLoop = (project, entity, faceRegion) => {
-  const vertices = meshWorldVertices(project, entity);
+const faceBoundaryLoop = (project, entity, faceRegion, vertices = meshWorldVertices(project, entity)) => {
   const edges = new Map();
   for (const triangleIndex of faceRegion.triangleIndices) {
     const offset = triangleIndex * 3;
@@ -1276,6 +1275,130 @@ const faceBoundaryLoop = (project, entity, faceRegion) => {
   }
   loop.pop();
   return loop;
+};
+
+const extendedFaceCut = (boundary, normal, start, end) => {
+  const direction = subtract3(end, start);
+  if (Math.hypot(...direction) < 0.0001 || boundary.length < 3) return null;
+  if ([start, end].some((point) => Math.abs(dot3(normal, subtract3(point, boundary[0]))) > 0.001)) return null;
+  const coordinates = profilePlaneCoordinates(boundary.flat(), normal);
+  const [origin, target] = profilePlaneCoordinates([...start, ...end], normal);
+  const ray = [target[0] - origin[0], target[1] - origin[1]];
+  const cross = (a, b) => a[0] * b[1] - a[1] * b[0];
+  const inside = (point) => pointInsideProfile(point, coordinates) || coordinates.some((corner, index) => pointOnProfileSegment(point, corner, coordinates[(index + 1) % coordinates.length]));
+  if (!inside(origin) || !inside(target)) return null;
+  const intersections = [];
+  for (let index = 0; index < boundary.length; index += 1) {
+    const corner = coordinates[index];
+    const next = coordinates[(index + 1) % boundary.length];
+    const edge = [next[0] - corner[0], next[1] - corner[1]];
+    const denominator = cross(ray, edge);
+    if (Math.abs(denominator) < PROFILE_INDEX_EPSILON) continue;
+    const offset = [corner[0] - origin[0], corner[1] - origin[1]];
+    const along = cross(offset, edge) / denominator;
+    const onEdge = cross(offset, ray) / denominator;
+    if (onEdge >= -0.000001 && onEdge <= 1.000001) intersections.push({ along, point: add3(start, scale3(direction, along)) });
+  }
+  intersections.sort((first, second) => first.along - second.along);
+  const first = intersections[0];
+  const last = intersections[intersections.length - 1];
+  if (!first || !last || last.along < 1 - 0.0001 || first.along > 0.0001 || distance3(first.point, last.point) < 0.0001) return null;
+  return [first.point, last.point];
+};
+
+export const meshOpeningAtPoint = (project, entity, point, normal) => {
+  if (entity.kind !== "mesh" || !Array.isArray(point) || !Array.isArray(normal)) return null;
+  const world = meshWorldVertices(project, entity);
+  const edges = new Map();
+  for (let index = 0; index < entity.indices.length; index += 3) {
+    const triangle = entity.indices.slice(index, index + 3);
+    for (let edge = 0; edge < 3; edge += 1) {
+      const start = localPointAt(world, triangle[edge]);
+      const end = localPointAt(world, triangle[(edge + 1) % 3]);
+      const key = meshEdgeKey(start, end);
+      const record = edges.get(key) ?? { start, end, count: 0 };
+      record.count += 1;
+      edges.set(key, record);
+    }
+  }
+  const onPlane = [...edges.values()].filter((edge) => edge.count === 1 &&
+    Math.abs(dot3(normal, subtract3(edge.start, point))) < 0.001 &&
+    Math.abs(dot3(normal, subtract3(edge.end, point))) < 0.001);
+  if (onPlane.length < 3) return null;
+  const remaining = [...onPlane];
+  const loops = [];
+  while (remaining.length) {
+    const edge = remaining.pop();
+    const loop = [edge.start, edge.end];
+    while (remaining.length) {
+      const current = meshPointKey(loop[loop.length - 1]);
+      const next = remaining.findIndex((candidate) => meshPointKey(candidate.start) === current || meshPointKey(candidate.end) === current);
+      if (next < 0) break;
+      const [candidate] = remaining.splice(next, 1);
+      loop.push(meshPointKey(candidate.start) === current ? candidate.end : candidate.start);
+      if (meshPointKey(loop[loop.length - 1]) === meshPointKey(loop[0])) break;
+    }
+    if (meshPointKey(loop[loop.length - 1]) !== meshPointKey(loop[0])) continue;
+    loop.pop();
+    const coordinates = profilePlaneCoordinates(loop.flat(), normal);
+    if (pointInsideProfile(profilePlaneCoordinates(point, normal)[0], coordinates) || loop.some((corner) => distance3(corner, point) < 0.001)) loops.push(loop);
+  }
+  return loops.sort((a, b) => Math.abs(signedProfileArea(profilePlaneCoordinates(a.flat(), normal))) - Math.abs(signedProfileArea(profilePlaneCoordinates(b.flat(), normal))))[0] ?? null;
+};
+
+export const fillMeshOpeningWithSplit = (project, entity, opening, start, end, normal) => {
+  if (!opening || opening.length < 3) return false;
+  const cut = extendedFaceCut(opening, normal, start, end);
+  if (!cut) return false;
+  if (opening.length > 512) return false;
+  const orientation = normalize3(normal);
+  const boundaryKeys = new Set(opening.map((point, index) => meshEdgeKey(point, opening[(index + 1) % opening.length])));
+  const adjacent = new Map();
+  const world = meshWorldVertices(project, entity);
+  for (let index = 0; index < entity.indices.length; index += 3) {
+    const triangle = entity.indices.slice(index, index + 3).map((vertex) => localPointAt(world, vertex));
+    for (let edge = 0; edge < 3; edge += 1) {
+      const a = triangle[edge];
+      const b = triangle[(edge + 1) % 3];
+      const key = meshEdgeKey(a, b);
+      if (!boundaryKeys.has(key)) continue;
+      const faceNormal = normalize3(cross3(subtract3(triangle[1], triangle[0]), subtract3(triangle[2], triangle[0])));
+      adjacent.set(key, faceNormal);
+    }
+  }
+  const boundaryWinding = Math.sign(signedProfileArea(profilePlaneCoordinates(opening.flat(), orientation))) || 1;
+  const capNormal = opening.some((point, index) => {
+    const next = opening[(index + 1) % opening.length];
+    const faceNormal = adjacent.get(meshEdgeKey(point, next));
+    return faceNormal && dot3(scale3(cross3(subtract3(next, point), orientation), boundaryWinding), faceNormal) < -0.9;
+  }) ? scale3(orientation, -1) : orientation;
+  const inverse = mat4Invert(entityWorldMatrix(project, entity));
+  if (!inverse) return false;
+  const vertices = Array.from(entity.vertices);
+  const indices = Array.from(entity.indices);
+  const vertexMap = new Map();
+  for (let index = 0; index < vertices.length / 3; index += 1) vertexMap.set(meshPointKey(localPointAt(vertices, index)), index);
+  // Temporarily cap the opening, then use the same seam logic as any existing face.
+  const capIndices = triangulateProfile(opening.flat(), capNormal);
+  for (let index = 0; index < capIndices.length; index += 3) {
+    appendWorldTriangle(vertices, indices, vertexMap, inverse,
+      opening[capIndices[index]], opening[capIndices[index + 1]], opening[capIndices[index + 2]], capNormal);
+  }
+  const original = { vertices: entity.vertices, indices: entity.indices, metadata: entity.metadata };
+  entity.vertices = vertices;
+  entity.indices = indices;
+  const region = getMeshFaceRegion(project, entity, indices.length / 3 - 1);
+  const split = splitMeshFaceByLine(project, entity, region, ...cut);
+  if (!split) Object.assign(entity, original);
+  else entity.metadata = { ...entity.metadata, solid: original.metadata?.solid === true };
+  return split;
+};
+
+export const meshOpeningNearSegment = (project, entity, start, end, normal) => {
+  const midpoint = midpoint3(start, end);
+  const opening = meshOpeningAtPoint(project, entity, midpoint, normal);
+  if (opening) return opening;
+  return meshOpeningAtPoint(project, entity, start, normal) ?? meshOpeningAtPoint(project, entity, end, normal);
 };
 
 const profilesOnFace = (project, entity, faceRegion) => {
@@ -1414,23 +1537,62 @@ export const indentMeshFaceWithProfile = (project, entity, face, profile, distan
   if (!inverse) throw new Error("The face transform cannot be inverted.");
   const vertices = Array.from(entity.vertices);
   const indices = [];
+  const retainedTriangles = [];
   const vertexMap = new Map();
   for (let index = 0; index < vertices.length / 3; index += 1) vertexMap.set(meshPointKey(localPointAt(vertices, index)), index);
   const removed = new Set(face.triangleIndices);
   for (let index = 0; index < entity.indices.length / 3; index += 1) {
-    if (!removed.has(index)) indices.push(...entity.indices.slice(index * 3, index * 3 + 3));
+    if (!removed.has(index)) {
+      indices.push(...entity.indices.slice(index * 3, index * 3 + 3));
+      retainedTriangles.push(index);
+    }
   }
   const ring = [];
   for (let index = 0; index < profile.points.length; index += 3) ring.push(profile.points.slice(index, index + 3));
-  const bottom = ring.map((point) => add3(point, scale3(face.normal, distance)));
+  const opposite = (() => {
+    const visited = new Set(face.triangleIndices);
+    let match = null;
+    for (let index = 0; index < entity.indices.length / 3; index += 1) {
+      if (visited.has(index)) continue;
+      const candidate = getMeshFaceRegion(project, entity, index);
+      if (!candidate) continue;
+      candidate.triangleIndices.forEach((triangle) => visited.add(triangle));
+      if (dot3(candidate.normal, face.normal) > -0.9999) continue;
+      const depth = dot3(subtract3(candidate.point, face.point), face.normal);
+      if (depth >= -0.001 || depth < distance - 0.001 || match && depth <= match.depth) continue;
+      const outline = faceBoundaryLoop(project, entity, candidate);
+      if (!outline) continue;
+      const exitRing = ring.map((point) => add3(point, scale3(face.normal, depth)));
+      const outer2d = profilePlaneCoordinates(outline.flat(), candidate.normal);
+      const inner2d = profilePlaneCoordinates(exitRing.flat(), candidate.normal);
+      if (!inner2d.every((point) => pointInsideProfile(point, outer2d)) || profilesIntersect(inner2d, outer2d)) continue;
+      match = { face: candidate, outline, ring: exitRing, depth };
+    }
+    return match;
+  })();
+  if (opposite) {
+    const exitTriangles = new Set(opposite.face.triangleIndices);
+    for (let index = retainedTriangles.length - 1; index >= 0; index -= 1) {
+      if (exitTriangles.has(retainedTriangles[index])) indices.splice(index * 3, 3);
+    }
+  }
+  const bottom = opposite?.ring ?? ring.map((point) => add3(point, scale3(face.normal, distance)));
   const rings = [...outer, ...ring];
   const topTriangles = triangulateProfileWithHoles(outer.flat(), [profile.points], face.normal);
   for (let index = 0; index < topTriangles.length; index += 3) {
     appendWorldTriangle(vertices, indices, vertexMap, inverse, rings[topTriangles[index]], rings[topTriangles[index + 1]], rings[topTriangles[index + 2]], face.normal);
   }
-  const floorTriangles = triangulateProfile(bottom.flat(), face.normal);
-  for (let index = 0; index < floorTriangles.length; index += 3) {
-    appendWorldTriangle(vertices, indices, vertexMap, inverse, bottom[floorTriangles[index]], bottom[floorTriangles[index + 1]], bottom[floorTriangles[index + 2]], face.normal);
+  if (opposite) {
+    const exitPoints = [...opposite.outline, ...bottom];
+    const exitTriangles = triangulateProfileWithHoles(opposite.outline.flat(), [bottom.flat()], opposite.face.normal);
+    for (let index = 0; index < exitTriangles.length; index += 3) {
+      appendWorldTriangle(vertices, indices, vertexMap, inverse, exitPoints[exitTriangles[index]], exitPoints[exitTriangles[index + 1]], exitPoints[exitTriangles[index + 2]], opposite.face.normal);
+    }
+  } else {
+    const floorTriangles = triangulateProfile(bottom.flat(), face.normal);
+    for (let index = 0; index < floorTriangles.length; index += 3) {
+      appendWorldTriangle(vertices, indices, vertexMap, inverse, bottom[floorTriangles[index]], bottom[floorTriangles[index + 1]], bottom[floorTriangles[index + 2]], face.normal);
+    }
   }
   const winding = Math.sign(signedProfileArea(profilePlaneCoordinates(profile.points, face.normal))) || 1;
   for (let index = 0; index < ring.length; index += 1) {
@@ -1541,6 +1703,9 @@ export const splitMeshFaceByLine = (project, entity, face, start, end) => {
   if (!boundary || Math.abs(dot3(face.normal, subtract3(start, face.point))) > 0.001 || Math.abs(dot3(face.normal, subtract3(end, face.point))) > 0.001) {
     return false;
   }
+  const cut = extendedFaceCut(boundary, face.normal, start, end);
+  if (!cut) return false;
+  [start, end] = cut;
   const onBoundary = (point) => boundary.findIndex((corner, index) => distance3(nearestPointOnBoundary(point, corner, boundary[(index + 1) % boundary.length]), point) < 0.001);
   const firstEdge = onBoundary(start);
   const secondEdge = onBoundary(end);

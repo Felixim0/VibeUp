@@ -476,6 +476,17 @@ button {
   box-shadow: 0 0 0 4px rgb(255 255 255 / 85%), 0 0 12px #bd962c;
 }
 
+.extrusion-guide {
+  position: absolute;
+  z-index: 6;
+  width: 0;
+  border-left: 2px dotted #c9a33f;
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px #fff);
+}
+
+.extrusion-guide[hidden] { display: none; }
+
 .snap-indicator.control-snap {
   width: 18px;
   height: 18px;

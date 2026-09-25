@@ -24,6 +24,8 @@ import {
   indentMeshFaceWithProfile,
   explodeGroup,
   makeGroup,
+  meshOpeningAtPoint,
+  fillMeshOpeningWithSplit,
   moveMeshFace,
   meshReport,
   meshEdgeFaceTriangleIndices,
@@ -345,6 +347,23 @@ test("a closed line-drawn face on a box can recess into the host", () => {
   assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
 });
 
+test("pushing a drawn face through a box opens and preserves the opposite face", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const profile = addEntity(project, createCircleEntity([0, 0, 40], 12, 18, "Through", [0, 0, 1]));
+  const { face, cut } = profileHostFace(project, profile);
+  indentMeshFaceWithProfile(project, box, face, cut, -55);
+  const report = meshReport(project, [box]);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+  const exit = getMeshFaceRegion(project, box, box.indices.length / 3 - 1);
+  assert.ok(exit);
+  const bottom = Array.from({ length: box.indices.length / 3 }, (_, index) => getMeshFaceRegion(project, box, index))
+    .filter((region) => region.normal[2] < -0.9 && Math.abs(region.point[2]) < 0.001);
+  assert.ok(bottom.length > 0, "the exit-side surface remains selectable");
+  assert.equal(entityBounds(project, box).min[2], 0);
+});
+
 test("camera rotation and pan sensitivity survive serialization", () => {
   const camera = new OrbitCamera();
   camera.rotateSensitivity = 2;
@@ -401,6 +420,35 @@ test("deleting a selected mesh face preserves the remaining faces", () => {
   assert.equal(box.metadata.solid, false);
 });
 
+test("a line through the interior of a deleted face recreates two independent faces", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  removeMeshFaces(box, getMeshFaceRegion(project, box, 2).triangleIndices);
+  const opening = meshOpeningAtPoint(project, box, [0, 0, 40], [0, 0, 1]);
+  assert.equal(opening?.length, 4);
+  assert.equal(fillMeshOpeningWithSplit(project, box, opening, [0, -15, 40], [0, 15, 40], [0, 0, 1]), true);
+  const topRegions = new Set();
+  for (let index = 0; index < box.indices.length / 3; index += 1) {
+    const face = getMeshFaceRegion(project, box, index);
+    if (face?.normal[2] > 0.9 && Math.abs(face.point[2] - 40) < 0.001) topRegions.add(face.triangleIndices.join(","));
+  }
+  assert.equal(topRegions.size, 2);
+});
+
+test("an interior line splits an intact rectangular face from arbitrary points", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(100, 100, 40));
+  const top = getMeshFaceRegion(project, box, 2);
+  assert.equal(splitMeshFaceByLine(project, box, top, [0, -15, 40], [0, 15, 40]), true);
+  const regions = new Map();
+  for (let index = 0; index < box.indices.length / 3; index += 1) {
+    const face = getMeshFaceRegion(project, box, index);
+    if (face?.normal[2] > 0.9 && Math.abs(face.point[2] - 40) < 0.001) regions.set(face.triangleIndices.join(","), face);
+  }
+  assert.equal(regions.size, 2);
+  assert.equal(meshReport(project, [box]).boundaryEdgeCount, 0);
+});
+
 test("deleting a selected mesh edge removes every face incident to it", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(20, 20, 20));
@@ -431,6 +479,27 @@ test("zoom becomes less sensitive near the model", () => {
   const closeStep = Math.abs(10 - close.distance);
   assert.ok(closeStep / 10 < distantStep / 1000);
   assert.ok(close.distance > 0);
+});
+
+test("zoom and near-object slowdown are adjustable and survive camera serialization", () => {
+  const base = new OrbitCamera();
+  const fast = new OrbitCamera();
+  fast.zoomSensitivity = 2;
+  base.zoom(100);
+  fast.zoom(100);
+  assert.ok(fast.distance > base.distance);
+  const close = new OrbitCamera();
+  close.distance = 10;
+  const unthrottled = new OrbitCamera();
+  unthrottled.distance = 10;
+  unthrottled.closeZoomSensitivity = 0;
+  close.zoom(100);
+  unthrottled.zoom(100);
+  assert.ok(unthrottled.distance - 10 > close.distance - 10);
+  const restored = new OrbitCamera();
+  restored.restore({ ...unthrottled.serialize(), zoomSensitivity: 2.5 });
+  assert.equal(restored.zoomSensitivity, 2.5);
+  assert.equal(restored.closeZoomSensitivity, 0);
 });
 
 test("orbit clamps at the top pole to keep the camera upright", () => {

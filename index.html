@@ -155,6 +155,8 @@
         <div class="ribbon-group hidden" data-ribbon="camera">
           <label class="camera-sensitivity">Rotate <input id="rotate-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera rotate sensitivity" /></label>
           <label class="camera-sensitivity">Move <input id="move-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera pan sensitivity" /></label>
+          <label class="camera-sensitivity">Zoom <input id="zoom-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera zoom sensitivity" /></label>
+          <label class="camera-sensitivity">Close zoom <input id="close-zoom-sensitivity" type="range" min="0" max="3" step="0.1" value="1" title="How much zoom slows near objects; zero disables slowdown" /></label>
           <label class="camera-sensitivity">Invert vertical orbit <input id="invert-vertical-orbit" type="checkbox" title="Invert vertical camera rotation" /></label>
           <button class="tool-button tool-select" type="button" data-tool="orbit" title="Orbit camera (O)">
             <span class="tool-icon">&#10227;</span><span>Orbit</span>
@@ -326,6 +328,7 @@
           <div class="annotation-layer" id="annotation-layer" aria-hidden="true"></div>
           <div class="selection-marquee" id="selection-marquee" aria-hidden="true" hidden></div>
           <div class="snap-indicator" id="snap-indicator" aria-hidden="true" hidden></div>
+          <div class="extrusion-guide" id="extrusion-guide" aria-hidden="true" hidden></div>
           <div class="viewport-busy" id="viewport-busy" role="status" aria-live="polite" hidden><span class="busy-spinner" aria-hidden="true"></span><span id="viewport-busy-label">Working on geometry…</span></div>
           <div class="viewport-hud" aria-hidden="true">
             <div class="axis-indicator"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>

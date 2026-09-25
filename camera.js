@@ -23,6 +23,8 @@ export class OrbitCamera {
     this.projectionType = "perspective";
     this.rotateSensitivity = 1;
     this.moveSensitivity = 1;
+    this.zoomSensitivity = 1;
+    this.closeZoomSensitivity = 1;
     this.invertVerticalOrbit = false;
   }
 
@@ -125,7 +127,8 @@ export class OrbitCamera {
   }
 
   zoom(delta) {
-    const precision = Math.max(0.0001, Math.min(0.0015, this.distance / 300000));
+    const basePrecision = Math.max(0.0001, Math.min(0.0015, this.distance / 300000));
+    const precision = Math.min(0.02, 0.0015 * this.zoomSensitivity) * Math.pow(basePrecision / 0.0015, this.closeZoomSensitivity);
     this.distance = Math.max(0.01, Math.min(1000000, this.distance * Math.exp(delta * precision)));
   }
 
@@ -162,6 +165,8 @@ export class OrbitCamera {
     this.projectionType = "perspective";
     this.rotateSensitivity = 1;
     this.moveSensitivity = 1;
+    this.zoomSensitivity = 1;
+    this.closeZoomSensitivity = 1;
     this.invertVerticalOrbit = false;
   }
 
@@ -174,6 +179,8 @@ export class OrbitCamera {
       projectionType: this.projectionType,
       rotateSensitivity: this.rotateSensitivity,
       moveSensitivity: this.moveSensitivity,
+      zoomSensitivity: this.zoomSensitivity,
+      closeZoomSensitivity: this.closeZoomSensitivity,
       invertVerticalOrbit: this.invertVerticalOrbit
     };
   }
@@ -190,6 +197,8 @@ export class OrbitCamera {
     this.projectionType = data.projectionType === "parallel" ? "parallel" : "perspective";
     this.rotateSensitivity = Number.isFinite(data.rotateSensitivity) ? Math.max(0.1, Math.min(4, data.rotateSensitivity)) : 1;
     this.moveSensitivity = Number.isFinite(data.moveSensitivity) ? Math.max(0.1, Math.min(4, data.moveSensitivity)) : 1;
+    this.zoomSensitivity = Number.isFinite(data.zoomSensitivity) ? Math.max(0.1, Math.min(4, data.zoomSensitivity)) : 1;
+    this.closeZoomSensitivity = Number.isFinite(data.closeZoomSensitivity) ? Math.max(0, Math.min(3, data.closeZoomSensitivity)) : 1;
     this.invertVerticalOrbit = data.invertVerticalOrbit === true;
   }
 }
