@@ -22,12 +22,15 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - **Home is the default ribbon.** It collects Select, Line, Rectangle, Circle, Box, Move, Rotate, Push/Pull, Tape, and Zoom Extents.
 - **Detachable tools.** Use **Detach tools** to open a draggable, resizable floating palette. Its tool groups have the same names as the ribbon menus and are separated by section rules. It can be narrowed substantially or positioned partly offscreen, while the main ribbon disappears to preserve workspace height.
 - Reattach from the top bar or palette close button. Drag any non-tool area of the palette to move it; detaching again resets its position.
+- Group selected faces and lines from **Edit → Group**. Selecting a grouped member picks the whole group; drag it to move the members together. **Solid → Take Away** prompts for the main group, then the group to subtract (click in the viewport or Outliner). Both must form closed meshes for subtraction.
 - The detachable palette can remain partly offscreen when deliberately positioned there.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
 - A new line that closes a coplanar loop of existing lines creates a selectable planar face. Hover the starting point to close the current loop.
+- Closing a line loop around a missing face of a 3D mesh rebuilds that face and closes the solid.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
 - **Camera sensitivity.** Adjust Rotate and Move sliders on the Camera ribbon; preferences persist with the workspace and saved project.
 - Adjust **Zoom** for overall wheel/drag speed and **Close zoom** for how strongly zoom slows near objects (zero disables that slowdown). Both settings persist with the camera.
+- Enter exact sensitivity values in the number boxes beside the Rotate, Move, Zoom, and Close zoom sliders.
 - **Vertical orbit direction.** Use **Invert vertical orbit** on the Camera ribbon to reverse up/down camera rotation; the setting persists with the camera.
 - Hold `Control` to restrict the selection marker to line joins and midpoints. It disappears when neither is within snapping range.
 - `Ctrl/Cmd+C` and `Ctrl/Cmd+V` copy and paste the selected model entities, face, or edge with an offset.

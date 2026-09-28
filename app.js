@@ -30,6 +30,7 @@ import {
   extrudeProfile,
   getEntity,
   getMaterial,
+  groupSolidMesh,
   isEntityVisible,
   lineWorldPoints,
   makeGroup,
@@ -51,6 +52,7 @@ import {
   removeMeshEdgeFaces,
   removeMeshFaces,
   reverseMeshFaces,
+  restoreMeshFacesFromLineLoop,
   rotateEntityAroundAxis,
   splitMeshFaceByLine,
   sweepProfile
@@ -199,6 +201,7 @@ const app = {
   lastCanvasPointer: null,
   controlHeld: false,
   preparingPushPull: false,
+  subtractPick: null,
   clipboard: null,
   inference: null,
   preferences: {
@@ -580,6 +583,27 @@ const getPointer = (event) => {
   };
 };
 
+const containingGroup = (entity) => {
+  let parent = entity?.parentId ? getEntity(app.project, entity.parentId) : null;
+  const visited = new Set();
+  while (parent?.parentId && !visited.has(parent.id)) {
+    visited.add(parent.id);
+    parent = getEntity(app.project, parent.parentId);
+  }
+  return parent?.kind === "group" ? parent : null;
+};
+
+const selectionContainer = (entity) => containingGroup(entity) ?? entity;
+
+const entityIsDescendantOf = (entity, parent) => {
+  let current = entity.parentId ? getEntity(app.project, entity.parentId) : null;
+  while (current) {
+    if (current.id === parent.id) return true;
+    current = current.parentId ? getEntity(app.project, current.parentId) : null;
+  }
+  return false;
+};
+
 const cssPointer = (event) => {
   const bounds = elements.canvas.getBoundingClientRect();
   return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -769,9 +793,14 @@ const marqueeSelect = (start, current, mode = "replace") => {
   }
   if (prior?.type === "multi") components.unshift(...prior.components);
   else if (prior) components.unshift(prior);
-  selectedIds.push(...components.map((component) => component.entityId));
+  selectedIds.push(...components.map((component) => selectionContainer(getEntity(app.project, component.entityId)).id));
   setSelection([...new Set(selectedIds)]);
-  if (components.length) setComponentSelection({ type: "multi", components });
+  const looseComponents = components.filter((component) => !containingGroup(getEntity(app.project, component.entityId)));
+  if (looseComponents.length) {
+    app.componentSelection = { type: "multi", components: looseComponents };
+    updatePanels();
+    requestRender();
+  }
   setStatus(`${components.length} ${contained ? "contained" : "crossing"} components selected.`);
 };
 
@@ -1230,6 +1259,13 @@ const pickVisibleMeshEdge = (event, preferredEntity = null) => {
 };
 
 const setComponentSelection = (selection) => {
+  if (selection?.entityId) {
+    const group = containingGroup(getEntity(app.project, selection.entityId));
+    if (group) {
+      setSelection([group.id]);
+      return;
+    }
+  }
   app.componentSelection = selection;
   const ids = selection?.type === "multi"
     ? Array.from(new Set(selection.components.map((component) => component.entityId)))
@@ -1456,6 +1492,12 @@ const connectedComponents = (seed) => {
 };
 
 const selectComponentByClickCount = (event, hit, clickCount = 1) => {
+  const group = containingGroup(hit.entity);
+  if (group) {
+    setSelection([group.id], event.shiftKey ? "toggle" : "replace");
+    setStatus(`${group.name} selected as one group.`);
+    return;
+  }
   if (clickCount >= 3 && app.selectFilter === "all") {
     const ids = app.project.entities.filter((entity) => entity.kind !== "group" && isEntityVisible(app.project, entity)).map((entity) => entity.id);
     setSelection(ids);
@@ -1613,6 +1655,12 @@ const currentPreview = () => {
 };
 
 const snapHoverPoint = (event) => {
+  if (app.subtractPick) {
+    const hit = pickEntity(event);
+    const group = hit ? containingGroup(hit.entity) : null;
+    app.snap = group && hit.point ? { point: hit.point, kind: "match-target", label: group.name } : null;
+    return;
+  }
   if (event.ctrlKey) {
     app.snap = controlLineSnap(event);
     if (drawingTools.has(app.activeTool)) app.hoverPoint = app.snap?.point ?? null;
@@ -1728,6 +1776,36 @@ const populateFloatingPalette = () => {
       });
       tools.append(button);
     }
+    if (sourceGroup.dataset.ribbon === "camera") {
+      for (const source of sourceGroup.querySelectorAll(".camera-sensitivity")) {
+        const label = source.cloneNode(true);
+        for (const input of label.querySelectorAll("input")) {
+          input.removeAttribute("id");
+          if (input.type === "checkbox") {
+            input.checked = app.camera.invertVerticalOrbit;
+            input.addEventListener("change", () => {
+              app.camera.invertVerticalOrbit = input.checked;
+              document.querySelector("#invert-vertical-orbit").checked = input.checked;
+              scheduleCameraAutosave();
+            });
+            continue;
+          }
+          const property = source.querySelector("input[type='range']")?.id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+          input.value = String(app.camera[property]);
+          input.addEventListener(input.type === "range" ? "input" : "change", () => {
+            const value = Number(input.value);
+            if (!Number.isFinite(value)) return;
+            app.camera[property] = Math.max(Number(input.min), Math.min(Number(input.max), value));
+            for (const sibling of label.querySelectorAll("input")) sibling.value = String(app.camera[property]);
+            const ribbonId = source.querySelector("input[type='range']")?.id;
+            document.querySelector(`#${ribbonId}`).value = String(app.camera[property]);
+            document.querySelector(`#${ribbonId}-value`).value = String(app.camera[property]);
+            scheduleCameraAutosave();
+          });
+        }
+        tools.append(label);
+      }
+    }
     if (tools.childElementCount > 0) {
       group.append(tools);
       fragment.append(group);
@@ -1803,6 +1881,7 @@ const activateSidePanel = (panelId) => {
 };
 
 const setTool = (tool) => {
+  if (tool !== "select") app.subtractPick = null;
   cancelPushPullPreview();
   if (app.interaction?.kind === "rotate-guide") {
     restoreSnapshot(app.interaction.before);
@@ -2013,7 +2092,10 @@ const appendOutlinerRows = (fragment, ids, depth = 0) => {
     const kind = element("span", { className: "outliner-kind", text: entity.kind === "mesh" ? "M" : entity.kind === "group" ? "G" : entity.kind === "edge" ? "E" : "A" });
     const name = element("span", { className: "row-name", text: entity.name });
     append(row, visible, kind, name);
-    row.addEventListener("click", (event) => setSelection([entity.id], event.shiftKey ? "toggle" : "replace"));
+    row.addEventListener("click", (event) => {
+      if (app.subtractPick) chooseSubtractGroup(selectionContainer(entity));
+      else setSelection([selectionContainer(entity).id], event.shiftKey ? "toggle" : "replace");
+    });
     fragment.append(row);
     if (entity.kind === "group") {
       appendOutlinerRows(fragment, entity.children, depth + 1);
@@ -3034,12 +3116,57 @@ const pasteSelection = () => {
 };
 
 const groupSelection = () => {
+  if (app.subtractPick) app.subtractPick = null;
+  const components = app.componentSelection?.type === "multi" ? app.componentSelection.components :
+    app.componentSelection ? [app.componentSelection] : [];
   const entities = currentSelection();
   if (entities.length === 0) {
     setStatus("Select one or more unlocked entities to make a group.", "warning");
     return;
   }
-  const group = mutate("Make group", () => makeGroup(app.project, entities.map((entity) => entity.id)));
+  const group = mutate("Make group", () => {
+    const members = [];
+    const byMesh = new Map();
+    const touched = new Set(components.map((component) => component.entityId));
+    if (entities.some((entity) => entity.locked)) throw new Error("Unlock the selected objects before grouping.");
+    if (entities.some((entity) => entity.parentId && !entities.some((candidate) => candidate.id === entity.parentId))) {
+      throw new Error("Explode the group before regrouping its members.");
+    }
+    for (const component of components) {
+      if (component.type === "line") {
+        const entity = getEntity(app.project, component.entityId);
+        if (entity) members.push(entity.id);
+      } else if (component.type === "face") {
+        const triangles = byMesh.get(component.entityId) ?? new Set();
+        component.triangleIndices.forEach((index) => triangles.add(index));
+        byMesh.set(component.entityId, triangles);
+      }
+    }
+    for (const [meshId, triangles] of byMesh) {
+      const source = getEntity(app.project, meshId);
+      if (!source || source.kind !== "mesh") continue;
+      const completeSolid = source.metadata?.solid === true && triangles.size === source.indices.length / 3;
+      if (completeSolid) {
+        members.push(source.id);
+        continue;
+      }
+      const indices = [...triangles].flatMap((index) => source.indices.slice(index * 3, index * 3 + 3));
+      const faceMesh = createMeshEntity({ name: `${source.name} faces`, vertices: source.vertices, indices, materialId: source.materialId, metadata: { primitive: "grouped-faces", planar: false, solid: false } });
+      faceMesh.transform = structuredClone(source.transform);
+      addEntity(app.project, faceMesh, source.parentId);
+      members.push(faceMesh.id);
+      if (triangles.size === source.indices.length / 3) {
+        removeEntity(app.project, source.id);
+      } else removeMeshFaces(source, [...triangles]);
+      app.renderer.invalidate(source.id);
+    }
+    if (!components.length) members.push(...entities.map((entity) => entity.id));
+    else members.push(...entities.filter((entity) => getEntity(app.project, entity.id) && (entity.kind === "group" || !touched.has(entity.id))).map((entity) => entity.id));
+    if (!members.length) throw new Error("Select faces or lines before grouping.");
+    const group = makeGroup(app.project, [...new Set(members)]);
+    app.renderer.invalidate();
+    return group;
+  });
   if (group) {
     setSelection([group.id]);
     setStatus("Created group.");
@@ -3061,28 +3188,48 @@ const explodeSelectedGroup = () => {
 };
 
 const makeSubtract = () => {
-  const meshes = selectedMeshes();
-  if (meshes.length !== 2) {
-    setStatus("Select exactly two meshes: target first, then cutter second.", "warning");
+  clearSelection();
+  setTool("select");
+  app.subtractPick = { stage: "target", targetId: null };
+  setStatus("Take Away: select the main object (first group). Click a group in the viewport or Outliner.");
+};
+
+const chooseSubtractGroup = (group) => {
+  const pick = app.subtractPick;
+  if (!pick || !group || group.kind !== "group") {
+    setStatus(`Take Away: select ${pick?.stage === "cutter" ? "the object to subtract" : "the main object"} as a group.`, "warning");
+    return;
+  }
+  if (pick.stage === "target") {
+    pick.stage = "cutter";
+    pick.targetId = group.id;
+    setSelection([group.id]);
+    setStatus("Take Away: select the object to subtract (second group).");
+    return;
+  }
+  const target = getEntity(app.project, pick.targetId);
+  if (!target || target.id === group.id) {
+    setStatus("Select a different group to subtract from the main object.", "warning");
     return;
   }
   try {
-    validateSubtractInputs(app.project, meshes[0], meshes[1]);
+    const mainSolid = groupSolidMesh(app.project, target);
+    const cutterSolid = groupSolidMesh(app.project, group);
+    validateSubtractInputs(app.project, mainSolid, cutterSolid);
+    const output = subtractMeshes(app.project, mainSolid, cutterSolid);
+    const result = mutate("Take away group", () => {
+      removeEntity(app.project, target.id);
+      removeEntity(app.project, group.id);
+      addEntity(app.project, output);
+      app.renderer.invalidate();
+      return output;
+    });
+    if (!result) return;
+    app.subtractPick = null;
+    setSelection([result.id]);
+    setStatus(`Took away ${group.name} from ${target.name}.`);
   } catch (error) {
     setStatus(error.message, "warning");
-    return;
-  }
-  let result = null;
-  const changed = mutate("Subtract solids", () => {
-    result = subtractMeshes(app.project, meshes[0], meshes[1]);
-    removeEntity(app.project, meshes[0].id);
-    removeEntity(app.project, meshes[1].id);
-    addEntity(app.project, result);
-    app.renderer.invalidate();
-  });
-  if (changed !== null && result) {
-    setSelection([result.id]);
-    setStatus("Subtracted the second selected solid from the first.");
   }
 };
 
@@ -3226,6 +3373,12 @@ const createLine = (start, end, surface = null) => {
     const face = closedLineFace(app.project, start, end, surface?.normal ?? [0, 0, 1]);
     if (face) {
       addEntity(app.project, face);
+      const restored = restoreMeshFacesFromLineLoop(app.project, face);
+      if (restored) {
+        removeEntity(app.project, face.id);
+        app.renderer.invalidate(restored.id);
+        return restored;
+      }
       return face;
     }
     return line;
@@ -3315,6 +3468,7 @@ const applyPushPull = (height) => {
   const component = app.componentSelection;
   if (component?.type === "face") {
     const entity = getEntity(app.project, component.entityId);
+    if (containingGroup(entity)) throw new Error("Explode the group before editing one of its faces.");
     if (!entity || entity.locked) {
       throw new Error("Select an unlocked face before using Push/Pull.");
     }
@@ -3547,7 +3701,7 @@ const beginPushPullPreviewNow = (event) => {
       setComponentSelection(component);
     }
   }
-  if (!entity || !component || entity.locked) {
+  if (!entity || !component || entity.locked || containingGroup(entity)) {
     setStatus("Click an unlocked planar face before using Push/Pull.", "warning");
     return;
   }
@@ -4033,15 +4187,17 @@ const beginTransform = (kind, event) => {
 };
 
 const beginDirectMove = (event, hit) => {
-  if (hit.entity.locked) {
+  const selected = selectionContainer(hit.entity);
+  if (selected.locked) {
     selectMeshComponent(event, hit);
     setStatus(`${hit.entity.name} is locked. Use Unlock object in Entity Info to edit it.`, "warning");
     return false;
   }
-  if (!app.selection.has(hit.entity.id)) {
-    setSelection([hit.entity.id], event.shiftKey ? "add" : "replace");
+  if (!app.selection.has(selected.id)) {
+    setSelection([selected.id], event.shiftKey ? "add" : "replace");
   }
-  const entities = currentSelection().filter((entity) => !entity.locked);
+  const entities = currentSelection().filter((entity) => !entity.locked)
+    .filter((entity) => !currentSelection().some((other) => other.id !== entity.id && entityIsDescendantOf(entity, other)));
   const pointer = getPointer(event);
   const surface = { point: Array.from(hit.point), normal: Array.from(hit.normal ?? [0, 0, 1]) };
   const startPoint = pointOnPlane(event, surface.point, surface.normal);
@@ -4320,6 +4476,15 @@ const handlePointerDown = (event) => {
     return;
   }
   if (tool === "select") {
+    const groupedHit = pickEntity(event);
+    if (app.subtractPick) {
+      chooseSubtractGroup(groupedHit ? selectionContainer(groupedHit.entity) : null);
+      return;
+    }
+    if (groupedHit && containingGroup(groupedHit.entity)) {
+      beginDirectMove(event, groupedHit);
+      return;
+    }
     if (event.ctrlKey) {
       const snap = controlLineSnap(event);
       if (snap) {
@@ -4654,6 +4819,7 @@ const handlePointerUp = (event) => {
 };
 
 const cancelActiveOperation = () => {
+  app.subtractPick = null;
   if (cancelPushPullPreview()) {
     setTool("select");
     setStatus("Operation cancelled.");
@@ -4674,6 +4840,7 @@ const cancelActiveOperation = () => {
 
 const newProject = () => {
   const replace = async () => {
+    app.subtractPick = null;
     window.clearTimeout(app.autosaveTimer);
     try {
       await preserveRecovery();
@@ -5074,9 +5241,21 @@ const init = async () => {
   loadPreferences();
   for (const [id, property] of [["rotate-sensitivity", "rotateSensitivity"], ["move-sensitivity", "moveSensitivity"], ["zoom-sensitivity", "zoomSensitivity"], ["close-zoom-sensitivity", "closeZoomSensitivity"]]) {
     const input = document.querySelector(`#${id}`);
+    const exact = document.querySelector(`#${id}-value`);
     input.value = String(app.camera[property]);
+    exact.value = String(app.camera[property]);
     input.addEventListener("input", () => {
       app.camera[property] = Number(input.value);
+      exact.value = input.value;
+      scheduleCameraAutosave();
+    });
+    exact.addEventListener("change", () => {
+      const value = Number(exact.value);
+      if (exact.value.trim() && Number.isFinite(value)) {
+        app.camera[property] = Math.max(Number(exact.min), Math.min(Number(exact.max), value));
+        input.value = String(app.camera[property]);
+      }
+      exact.value = String(app.camera[property]);
       scheduleCameraAutosave();
     });
   }

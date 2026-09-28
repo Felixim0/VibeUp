@@ -344,6 +344,11 @@ button {
   width: 100%;
 }
 
+.floating-palette-group-tools .camera-sensitivity {
+  grid-column: 1 / -1;
+  padding: 4px 2px;
+}
+
 .ribbon-divider {
   width: 1px;
   height: 47px;
@@ -460,7 +465,8 @@ button {
   padding: 0 8px;
 }
 
-.camera-sensitivity input { width: 86px; accent-color: #158779; }
+.camera-sensitivity input[type="range"] { width: 86px; accent-color: #158779; }
+.camera-sensitivity input[type="number"] { width: 52px; min-width: 0; padding: 3px; font: inherit; }
 
 .snap-indicator.inferred {
   border-radius: 2px;

@@ -134,6 +134,8 @@ try {
   if (paletteResize !== "both") {
     throw new Error(`Floating palette is not resizable: ${paletteResize}`);
   }
+  const paletteExactZoom = page.locator("#floating-palette input[aria-label='Exact zoom sensitivity']");
+  if (await paletteExactZoom.count() !== 1) throw new Error("Detached camera controls are missing exact numeric sensitivities.");
   const detachedRibbonVisible = await page.locator("#ribbon").evaluate((ribbon) => getComputedStyle(ribbon).display !== "none");
   if (detachedRibbonVisible) {
     throw new Error("The empty detached ribbon remains visible instead of returning workspace height.");
@@ -206,6 +208,18 @@ try {
     throw new Error("Viewport has no layout box for undo verification.");
   }
   await page.getByText("Camera", { exact: true }).click();
+  await page.locator("#rotate-sensitivity-value").fill("1.237");
+  await page.locator("#rotate-sensitivity-value").press("Tab");
+  await page.waitForTimeout(900);
+  if ((await readAutosavedCamera())?.rotateSensitivity !== 1.237) throw new Error("Exact rotate sensitivity did not persist.");
+  await page.locator("#rotate-sensitivity").fill("1");
+  for (const id of ["move", "zoom", "close-zoom"]) {
+    const exact = page.locator(`#${id}-sensitivity-value`);
+    await exact.fill("1.125");
+    await exact.press("Tab");
+    if (await exact.inputValue() !== "1.125") throw new Error(`Exact ${id} sensitivity rejected a precise value.`);
+    await page.locator(`#${id}-sensitivity`).fill("1");
+  }
   await page.locator("#zoom-sensitivity").fill("2.5");
   await page.locator("#close-zoom-sensitivity").fill("0.5");
   await page.waitForTimeout(900);
@@ -600,6 +614,18 @@ try {
   await page.locator("#modal-dialog input").nth(2).fill("20");
   await page.getByRole("button", { name: "Add Box", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".outliner-row").length === 1, null, { timeout: 5000 });
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByTitle("Make group from selection").click();
+  if (!((await page.locator("#selection-status").textContent()) ?? "").includes("Group")) throw new Error("Grouping a selected box did not select its group.");
+  await page.getByRole("button", { name: "Solid", exact: true }).click();
+  await page.getByTitle("Take away one group from another").click();
+  if (!((await page.locator("#status-message").textContent()) ?? "").includes("select the main object")) throw new Error("Take Away did not prompt for the main object.");
+  await page.getByRole("tab", { name: "Outliner", exact: true }).click();
+  await page.locator(".outliner-row").first().click();
+  if (!((await page.locator("#status-message").textContent()) ?? "").includes("select the object to subtract")) throw new Error("Take Away did not prompt for the subtracting group.");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByTitle("Explode selected group").click();
   const fileProject = createEmptyProject();
   addEntity(fileProject, createBoxEntity(25, 25, 25, "Loaded Box"));
   const fileArchive = createZip([{

@@ -153,10 +153,10 @@
         </div>
 
         <div class="ribbon-group hidden" data-ribbon="camera">
-          <label class="camera-sensitivity">Rotate <input id="rotate-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera rotate sensitivity" /></label>
-          <label class="camera-sensitivity">Move <input id="move-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera pan sensitivity" /></label>
-          <label class="camera-sensitivity">Zoom <input id="zoom-sensitivity" type="range" min="0.1" max="4" step="0.1" value="1" title="Camera zoom sensitivity" /></label>
-          <label class="camera-sensitivity">Close zoom <input id="close-zoom-sensitivity" type="range" min="0" max="3" step="0.1" value="1" title="How much zoom slows near objects; zero disables slowdown" /></label>
+          <label class="camera-sensitivity">Rotate <input id="rotate-sensitivity" type="range" min="0.1" max="4" step="0.01" value="1" title="Camera rotate sensitivity" /><input id="rotate-sensitivity-value" type="number" min="0.1" max="4" step="0.001" value="1" aria-label="Exact rotate sensitivity" /></label>
+          <label class="camera-sensitivity">Move <input id="move-sensitivity" type="range" min="0.1" max="4" step="0.01" value="1" title="Camera pan sensitivity" /><input id="move-sensitivity-value" type="number" min="0.1" max="4" step="0.001" value="1" aria-label="Exact move sensitivity" /></label>
+          <label class="camera-sensitivity">Zoom <input id="zoom-sensitivity" type="range" min="0.1" max="4" step="0.01" value="1" title="Camera zoom sensitivity" /><input id="zoom-sensitivity-value" type="number" min="0.1" max="4" step="0.001" value="1" aria-label="Exact zoom sensitivity" /></label>
+          <label class="camera-sensitivity">Close zoom <input id="close-zoom-sensitivity" type="range" min="0" max="3" step="0.01" value="1" title="How much zoom slows near objects; zero disables slowdown" /><input id="close-zoom-sensitivity-value" type="number" min="0" max="3" step="0.001" value="1" aria-label="Exact close zoom sensitivity" /></label>
           <label class="camera-sensitivity">Invert vertical orbit <input id="invert-vertical-orbit" type="checkbox" title="Invert vertical camera rotation" /></label>
           <button class="tool-button tool-select" type="button" data-tool="orbit" title="Orbit camera (O)">
             <span class="tool-icon">&#10227;</span><span>Orbit</span>
@@ -268,8 +268,8 @@
         </div>
 
         <div class="ribbon-group hidden" data-ribbon="solid">
-          <button class="tool-button" type="button" data-action="solid-subtract" title="Subtract selected cutter from selected target">
-            <span class="tool-icon">&#8722;</span><span>Subtract</span>
+          <button class="tool-button" type="button" data-action="solid-subtract" title="Take away one group from another">
+            <span class="tool-icon">&#8722;</span><span>Take Away</span>
           </button>
           <button class="tool-button" type="button" data-action="reverse-faces" title="Reverse selected face winding">
             <span class="tool-icon">&#8646;</span><span>Reverse Faces</span>

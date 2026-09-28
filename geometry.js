@@ -262,6 +262,40 @@ export const explodeGroup = (project, group) => {
   return childIds.map((id) => getEntity(project, id)).filter(Boolean);
 };
 
+export const groupSolidMesh = (project, group) => {
+  if (group?.kind !== "group") throw new Error("Take Away needs a group of faces.");
+  const vertices = [];
+  const indices = [];
+  let materialId = "material-default";
+  const meshes = [];
+  const seen = new Set();
+  const visit = (parent) => {
+    if (seen.has(parent.id)) throw new Error("The group hierarchy contains a cycle.");
+    seen.add(parent.id);
+    for (const childId of parent.children) {
+      const child = getEntity(project, childId);
+      if (!child) continue;
+      if (child.kind === "group") visit(child);
+      else if (child.kind === "mesh") {
+        meshes.push(child);
+        const offset = vertices.length / 3;
+        vertices.push(...meshWorldVertices(project, child));
+        indices.push(...child.indices.map((index) => index + offset));
+        materialId = child.materialId;
+      }
+    }
+  };
+  visit(group);
+  if (!indices.length) throw new Error(`${group.name} has no faces to subtract.`);
+  const singleBox = meshes.length === 1 && meshes[0].metadata?.primitive === "box" &&
+    meshes[0].transform.rotation.every((value) => Math.abs(value) < EPSILON) &&
+    meshes[0].transform.scale.every((value) => Math.abs(value - 1) < EPSILON) &&
+    group.transform.rotation.every((value) => Math.abs(value) < EPSILON) &&
+    group.transform.scale.every((value) => Math.abs(value - 1) < EPSILON);
+  const metadata = singleBox ? { ...meshes[0].metadata } : { primitive: "group-solid", solid: true };
+  return createMeshEntity({ name: group.name, vertices, indices, materialId, metadata });
+};
+
 export const boxGeometry = (width = 100, depth = 100, height = 100) => {
   const x = width / 2;
   const y = depth / 2;
@@ -840,6 +874,34 @@ export const closedLineFace = (project, start, end, normal = [0, 0, 1]) => {
     }
   }
   return best?.face ?? null;
+};
+
+export const restoreMeshFacesFromLineLoop = (project, face) => {
+  if (!face?.metadata?.planar) return null;
+  const worldPoints = transformedProfilePoints(project, face);
+  for (const mesh of project.entities) {
+    if (mesh.id === face.id || mesh.kind !== "mesh" || mesh.locked || !isEntityVisible(project, mesh)) continue;
+    const opening = meshOpeningAtPoint(project, mesh, worldPoints.slice(0, 3), face.metadata.profileNormal);
+    if (!opening || opening.length !== worldPoints.length / 3) continue;
+    const matches = opening.every((point) => worldPoints.some((_, index) => index % 3 === 0 && distance3(point, worldPoints.slice(index, index + 3)) < 0.001));
+    if (!matches) continue;
+    const inverse = mat4Invert(entityWorldMatrix(project, mesh));
+    if (!inverse) continue;
+    const indices = Array.from(mesh.indices);
+    const vertices = Array.from(mesh.vertices);
+    const vertexMap = new Map();
+    for (let index = 0; index < vertices.length / 3; index += 1) vertexMap.set(meshPointKey(localPointAt(vertices, index)), index);
+    const worldNormal = normalize3(transformDirection(entityWorldMatrix(project, face), face.metadata.profileNormal));
+    const cap = triangulateProfile(opening.flat(), worldNormal);
+    for (let index = 0; index < cap.length; index += 3) {
+      appendWorldTriangle(vertices, indices, vertexMap, inverse, opening[cap[index]], opening[cap[index + 1]], opening[cap[index + 2]], worldNormal);
+    }
+    mesh.vertices = vertices;
+    mesh.indices = indices;
+    mesh.metadata = { ...mesh.metadata, primitive: "edited-mesh", solid: true };
+    return mesh;
+  }
+  return null;
 };
 
 const faceArea = (ring, normal) => Math.abs(signedProfileArea(profilePlaneCoordinates(ring.flat(), normal)));

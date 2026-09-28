@@ -21,6 +21,7 @@ import {
   faceProfileHoles,
   getEntity,
   getMeshFaceRegion,
+  groupSolidMesh,
   indentMeshFaceWithProfile,
   explodeGroup,
   makeGroup,
@@ -36,6 +37,7 @@ import {
   reverseMeshFaces,
   removeMeshEdgeFaces,
   removeMeshFaces,
+  restoreMeshFacesFromLineLoop,
   rotateEntityAroundAxis,
   splitMeshFaceByLine
 } from "../geometry.js";
@@ -435,6 +437,19 @@ test("a line through the interior of a deleted face recreates two independent fa
   assert.equal(topRegions.size, 2);
 });
 
+test("closing lines around a missing box face restores its 3D shell", () => {
+  const project = createEmptyProject();
+  const box = addEntity(project, createBoxEntity(40, 40, 20));
+  removeMeshFaces(box, getMeshFaceRegion(project, box, 2).triangleIndices);
+  const corners = [[-20, -20, 20], [20, -20, 20], [20, 20, 20], [-20, 20, 20]];
+  for (let index = 0; index < 3; index += 1) addEntity(project, createEdgeEntity({ points: [...corners[index], ...corners[index + 1]] }));
+  const face = addEntity(project, closedLineFace(project, corners[3], corners[0]));
+  assert.equal(restoreMeshFacesFromLineLoop(project, face)?.id, box.id);
+  const report = meshReport(project, [box]);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
+});
+
 test("an interior line splits an intact rectangular face from arbitrary points", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(100, 100, 40));
@@ -593,6 +608,23 @@ test("group preserves children and basic entity lookup", () => {
   assert.equal(group.children.length, 2);
   assert.equal(getEntity(project, first.id).parentId, group.id);
   assert.equal(project.roots.length, 1);
+});
+
+test("two groups of faces can be moved as units and subtracted in picked order", () => {
+  const project = createEmptyProject();
+  const target = addEntity(project, createBoxEntity(40, 40, 40, "Main"));
+  const cutter = addEntity(project, createBoxEntity(20, 20, 20, "Cutter"));
+  cutter.transform.position = [0, 0, 10];
+  const main = makeGroup(project, [target.id], "Main group");
+  const subtractor = makeGroup(project, [cutter.id], "Cutter group");
+  subtractor.transform.position = [5, 0, 0];
+  const mainSolid = groupSolidMesh(project, main);
+  const cutterSolid = groupSolidMesh(project, subtractor);
+  assert.equal(entityBounds(project, cutterSolid).min[0], -5);
+  const result = subtractMeshes(project, mainSolid, cutterSolid);
+  const output = createEmptyProject();
+  addEntity(output, result);
+  assert.equal(meshReport(output, [result]).boundaryEdgeCount, 0);
 });
 
 test("a group exposes its direct members for context selection", () => {
