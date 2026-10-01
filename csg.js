@@ -376,6 +376,57 @@ const subtractNestedAxisAlignedBoxes = (project, target, cutter) => {
   });
 };
 
+// Partition both boxes at every boundary so neighbouring exposed quads share
+// identical vertices (the BSP path otherwise leaves T-junctions on box cuts).
+const subtractOverlappingAxisAlignedBoxes = (project, target, cutter) => {
+  const outer = axisAlignedBoxBounds(project, target);
+  const inner = axisAlignedBoxBounds(project, cutter);
+  if (!outer || !inner) return null;
+  const axes = [0, 1, 2].map((axis) => [...new Set([
+    outer.min[axis], outer.max[axis],
+    Math.max(outer.min[axis], Math.min(outer.max[axis], inner.min[axis])),
+    Math.max(outer.min[axis], Math.min(outer.max[axis], inner.max[axis]))
+  ])].sort((first, second) => first - second));
+  const occupied = (i, j, k) => {
+    const cell = [i, j, k];
+    if (cell.some((value, axis) => value < 0 || value >= axes[axis].length - 1)) return false;
+    const midpoint = cell.map((value, axis) => (axes[axis][value] + axes[axis][value + 1]) / 2);
+    return midpoint.some((value, axis) => value < inner.min[axis] - EPSILON || value > inner.max[axis] + EPSILON);
+  };
+  const vertices = [];
+  const indices = [];
+  for (let i = 0; i < axes[0].length - 1; i += 1) {
+    for (let j = 0; j < axes[1].length - 1; j += 1) {
+      for (let k = 0; k < axes[2].length - 1; k += 1) {
+        if (!occupied(i, j, k)) continue;
+        const low = [axes[0][i], axes[1][j], axes[2][k]];
+        const high = [axes[0][i + 1], axes[1][j + 1], axes[2][k + 1]];
+        for (let axis = 0; axis < 3; axis += 1) {
+          const u = (axis + 1) % 3;
+          const v = (axis + 2) % 3;
+          for (const sign of [-1, 1]) {
+            const neighbor = [i, j, k];
+            neighbor[axis] += sign;
+            if (occupied(...neighbor)) continue;
+            const point = (first, second) => {
+              const result = [0, 0, 0];
+              result[axis] = sign < 0 ? low[axis] : high[axis];
+              result[u] = first;
+              result[v] = second;
+              return result;
+            };
+            const quad = [point(low[u], low[v]), point(high[u], low[v]), point(high[u], high[v]), point(low[u], high[v])];
+            addQuad(vertices, indices, sign < 0 ? quad.slice().reverse() : quad);
+          }
+        }
+      }
+    }
+  }
+  if (!indices.length) throw new Error("Subtract removed the entire main object.");
+  return createMeshEntity({ name: `${target.name} minus ${cutter.name}`, vertices, indices,
+    materialId: target.materialId, metadata: { primitive: "csg-subtract", solid: true, boolean: "subtract" } });
+};
+
 const signedMeshVolume = (project, entity) => {
   let volume = 0;
   for (const [a, b, c] of meshWorldTriangleIterator(project, entity)) {
@@ -415,13 +466,14 @@ export const subtractMeshes = (project, target, cutter) => {
   validateSubtractInputs(project, target, cutter);
 
   if (entityIsAxisAlignedBox(target) && entityIsAxisAlignedBox(cutter)) {
-    const nestedBoxResult = subtractNestedAxisAlignedBoxes(project, target, cutter);
-    if (nestedBoxResult) {
-      const resultProject = { ...project, entities: [nestedBoxResult], roots: [nestedBoxResult.id] };
-      if (signedMeshVolume(resultProject, nestedBoxResult) < 0) {
-        reverseMeshWinding(nestedBoxResult);
+    const boxResult = subtractNestedAxisAlignedBoxes(project, target, cutter) ?? subtractOverlappingAxisAlignedBoxes(project, target, cutter);
+    if (boxResult) {
+      const resultProject = { ...project, entities: [boxResult], roots: [boxResult.id] };
+      if (signedMeshVolume(resultProject, boxResult) < 0) {
+        reverseMeshWinding(boxResult);
       }
-      return nestedBoxResult;
+      if (!meshIsClosed(resultProject, boxResult)) throw new Error("Subtract could not produce a closed box mesh.");
+      return boxResult;
     }
   }
 

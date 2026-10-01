@@ -23,11 +23,14 @@ An offline-first, installable browser 3D editor for millimetre-based modelling a
 - **Detachable tools.** Use **Detach tools** to open a draggable, resizable floating palette. Its tool groups have the same names as the ribbon menus and are separated by section rules. It can be narrowed substantially or positioned partly offscreen, while the main ribbon disappears to preserve workspace height.
 - Reattach from the top bar or palette close button. Drag any non-tool area of the palette to move it; detaching again resets its position.
 - Group selected faces and lines from **Edit → Group**. Selecting a grouped member picks the whole group; drag it to move the members together. **Solid → Take Away** prompts for the main group, then the group to subtract (click in the viewport or Outliner). Both must form closed meshes for subtraction.
+- During Take Away, the main group is green and the subtracting group red. Intersecting axis-aligned box groups now cut closed openings, including through-cuts.
 - The detachable palette can remain partly offscreen when deliberately positioned there.
 - **SketchUp-style snapping.** The mouse snaps to endpoints, midpoints, and compatible edges. A visible point shows the pending click location.
 - A new line that closes a coplanar loop of existing lines creates a selectable planar face. Hover the starting point to close the current loop.
 - Closing a line loop around a missing face of a 3D mesh rebuilds that face and closes the solid.
 - Endpoint and midpoint snaps have larger red markers. Hold `Shift` while drawing a line to keep it on its starting plane; the live line turns green.
+- Drawing prefers existing line endpoints within the pointer's snap range and welds tiny coordinate differences when closing a loop, so a completed outline forms a face.
+- Arrow keys nudge the yellow selection point along X/Y by the snap increment; hold `Control` with an arrow to nudge it along Z. The next line click can use the adjusted point.
 - **Camera sensitivity.** Adjust Rotate and Move sliders on the Camera ribbon; preferences persist with the workspace and saved project.
 - Adjust **Zoom** for overall wheel/drag speed and **Close zoom** for how strongly zoom slows near objects (zero disables that slowdown). Both settings persist with the camera.
 - Enter exact sensitivity values in the number boxes beside the Rotate, Move, Zoom, and Close zoom sliders.

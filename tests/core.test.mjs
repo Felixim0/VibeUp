@@ -325,6 +325,14 @@ test("closing coplanar line segments creates a selectable planar face", () => {
   assert.equal(closedLineFace(project, [0, 20, 5], [0, 0, 5]), null);
 });
 
+test("sub-centimetre endpoint drift still closes a line loop", () => {
+  const project = createEmptyProject();
+  addEntity(project, createEdgeEntity({ points: [0, 0, 0, 20, 0, 0] }));
+  addEntity(project, createEdgeEntity({ points: [20.001, 0, 0, 20, 20, 0] }));
+  addEntity(project, createEdgeEntity({ points: [20, 20.001, 0, 0, 20, 0] }));
+  assert.ok(closedLineFace(project, [0, 20.001, 0], [0.001, 0, 0]));
+});
+
 test("closed profile on an existing face can indent its host", () => {
   const project = createEmptyProject();
   const box = addEntity(project, createBoxEntity(100, 100, 40));
@@ -625,6 +633,21 @@ test("two groups of faces can be moved as units and subtracted in picked order",
   const output = createEmptyProject();
   addEntity(output, result);
   assert.equal(meshReport(output, [result]).boundaryEdgeCount, 0);
+});
+
+test("take-away cuts an overlapping box all the way through its main group", () => {
+  const project = createEmptyProject();
+  const mainBox = addEntity(project, createBoxEntity(40, 40, 40, "Main"));
+  const cutterBox = addEntity(project, createBoxEntity(20, 20, 60, "Cutter"));
+  cutterBox.transform.position = [5, 0, -10];
+  const main = makeGroup(project, [mainBox.id]);
+  const cutter = makeGroup(project, [cutterBox.id]);
+  const result = subtractMeshes(project, groupSolidMesh(project, main), groupSolidMesh(project, cutter));
+  const output = createEmptyProject();
+  addEntity(output, result);
+  const report = meshReport(output, [result]);
+  assert.equal(report.boundaryEdgeCount, 0);
+  assert.equal(report.nonManifoldEdgeCount, 0);
 });
 
 test("a group exposes its direct members for context selection", () => {

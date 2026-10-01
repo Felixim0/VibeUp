@@ -833,16 +833,26 @@ export const closedLineFace = (project, start, end, normal = [0, 0, 1]) => {
   if (Math.hypot(...direction) < EPSILON) return null;
   const origin = start;
   const segments = [];
+  const joints = new Map();
+  const key = (point) => point.map((value) => Math.round(value * 100)).join(":");
+  const canonical = (point) => {
+    const id = key(point);
+    if (!joints.has(id)) joints.set(id, point);
+    return joints.get(id);
+  };
+  const newStart = start;
+  const newEnd = end;
   for (const entity of project.entities) {
     if (entity.kind !== "edge" || !isEntityVisible(project, entity) || entity.points.length !== 6) continue;
     const points = lineWorldPoints(project, entity);
     const first = points.slice(0, 3);
     const second = points.slice(3, 6);
-    if (Math.abs(dot3(direction, subtract3(first, origin))) > 0.001 || Math.abs(dot3(direction, subtract3(second, origin))) > 0.001) continue;
-    if (distance3(first, start) < 0.001 && distance3(second, end) < 0.001 || distance3(first, end) < 0.001 && distance3(second, start) < 0.001) continue;
-    segments.push({ first, second });
+    if (Math.abs(dot3(direction, subtract3(first, origin))) > 0.02 || Math.abs(dot3(direction, subtract3(second, origin))) > 0.02) continue;
+    if (key(first) === key(newStart) && key(second) === key(newEnd) || key(first) === key(newEnd) && key(second) === key(newStart)) continue;
+    segments.push({ first: canonical(first), second: canonical(second) });
   }
-  const key = (point) => point.map((value) => Math.round(value * 1000)).join(":");
+  start = canonical(start);
+  end = canonical(end);
   const adjacency = new Map();
   for (const segment of segments) {
     for (const [point, next] of [[segment.first, segment.second], [segment.second, segment.first]]) {
@@ -903,6 +913,7 @@ export const restoreMeshFacesFromLineLoop = (project, face) => {
   }
   return null;
 };
+
 
 const faceArea = (ring, normal) => Math.abs(signedProfileArea(profilePlaneCoordinates(ring.flat(), normal)));
 

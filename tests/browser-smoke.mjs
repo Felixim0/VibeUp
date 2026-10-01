@@ -436,6 +436,13 @@ try {
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.locator("[data-ribbon='home']").getByTitle("Select and drag (Space)").click();
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+  await page.keyboard.press("ArrowRight");
+  const keyboardX = (await page.locator("#status-message").textContent()) ?? "";
+  if (!keyboardX.includes("Arrows move X/Y")) throw new Error(`Arrow key did not move the selection marker: ${keyboardX}`);
+  await page.keyboard.press("Control+ArrowUp");
+  const keyboardZ = (await page.locator("#status-message").textContent()) ?? "";
+  if (!keyboardZ.includes("Ctrl+arrows move Z") || await page.locator("#snap-indicator").isHidden()) throw new Error(`Control+ArrowUp did not move the selection marker vertically: ${keyboardZ}`);
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
   await page.mouse.down();
   await page.mouse.move(canvasBox.x + canvasBox.width * 0.54, canvasBox.y + canvasBox.height * 0.5, { steps: 4 });
   await page.mouse.up();
@@ -623,6 +630,27 @@ try {
   await page.getByRole("tab", { name: "Outliner", exact: true }).click();
   await page.locator(".outliner-row").first().click();
   if (!((await page.locator("#status-message").textContent()) ?? "").includes("select the object to subtract")) throw new Error("Take Away did not prompt for the subtracting group.");
+  if (!await page.locator(".outliner-row").first().evaluate((row) => row.classList.contains("takeaway-main"))) {
+    throw new Error("Main group was not highlighted green during Take Away.");
+  }
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.getByTitle("Add a dimensioned box").first().click();
+  await page.locator("#modal-dialog input").nth(0).fill("8");
+  await page.locator("#modal-dialog input").nth(1).fill("8");
+  await page.locator("#modal-dialog input").nth(2).fill("28");
+  await page.getByRole("button", { name: "Add Box", exact: true }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByTitle("Make group from selection").click();
+  await page.getByRole("button", { name: "Solid", exact: true }).click();
+  await page.getByTitle("Take away one group from another").click();
+  await page.getByRole("tab", { name: "Outliner", exact: true }).click();
+  await page.locator(".outliner-row").first().click();
+  const groupRows = page.locator(".outliner-row");
+  await groupRows.filter({ hasText: "Box" }).last().click();
+  await page.locator("#viewport-busy").waitFor({ state: "hidden" });
+  const takeAwayStatus = await page.locator("#status-message").textContent();
+  if (!takeAwayStatus?.includes("Took away")) throw new Error(`Take Away did not subtract the picked overlapping groups: ${takeAwayStatus}`);
+  await page.keyboard.press("Control+Z");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page.getByTitle("Explode selected group").click();

@@ -500,7 +500,7 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST);
   }
 
-  drawMesh(entity, material, model, viewProjection, settings, selected, componentSelections, section) {
+  drawMesh(entity, material, model, viewProjection, settings, selected, componentSelections, section, pickColor = null) {
     const { gl, meshProgram } = this;
     const record = this.ensureMesh(entity);
     gl.useProgram(meshProgram.program);
@@ -516,10 +516,10 @@ export class Renderer {
     const objectSelected = selected && componentSelections.length === 0;
     gl.uniformMatrix4fv(meshProgram.uniforms.uModel, false, model);
     gl.uniformMatrix4fv(meshProgram.uniforms.uViewProjection, false, viewProjection);
-    gl.uniform3fv(meshProgram.uniforms.uColor, color);
+    gl.uniform3fv(meshProgram.uniforms.uColor, pickColor ?? color);
     gl.uniform3fv(meshProgram.uniforms.uLightDirection, normalize3([-0.4, -0.55, 0.73]));
-    gl.uniform1i(meshProgram.uniforms.uShadows, settings.viewMode === "solid" ? 0 : settings.shadowsVisible ? 1 : 0);
-    gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, [0.62, 0.72, 0.95]);
+    gl.uniform1i(meshProgram.uniforms.uShadows, pickColor || settings.viewMode === "solid" ? 0 : settings.shadowsVisible ? 1 : 0);
+    gl.uniform3fv(meshProgram.uniforms.uBackfaceColor, pickColor ?? [0.62, 0.72, 0.95]);
     gl.uniform1f(meshProgram.uniforms.uOpacity, settings.viewMode === "x-ray" ? 0.22 : 1);
     gl.uniform1i(meshProgram.uniforms.uSectionEnabled, section ? 1 : 0);
     gl.uniform3fv(meshProgram.uniforms.uSectionPoint, section?.point ?? [0, 0, 0]);
@@ -540,7 +540,7 @@ export class Renderer {
       gl.vertexAttribDivisor(edgeProgram.attributes.aEnd, 1);
       gl.uniformMatrix4fv(edgeProgram.uniforms.uModel, false, model);
       gl.uniformMatrix4fv(edgeProgram.uniforms.uViewProjection, false, viewProjection);
-      gl.uniform4fv(edgeProgram.uniforms.uColor, objectSelected ? colorWithAlpha(settings.appearance.selectionColor, 0.82) : colorWithAlpha(settings.appearance.edgeColor, 0.92));
+       gl.uniform4fv(edgeProgram.uniforms.uColor, pickColor ? [...pickColor, 1] : objectSelected ? colorWithAlpha(settings.appearance.selectionColor, 0.82) : colorWithAlpha(settings.appearance.edgeColor, 0.92));
       gl.uniform2f(edgeProgram.uniforms.uViewport, this.width, this.height);
       gl.uniform1f(edgeProgram.uniforms.uThickness, Math.max(objectSelected ? 1.3 : 0.7, settings.appearance.edgeWidth * 0.62) * this.pixelRatio);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, record.edgeCount);
@@ -645,7 +645,7 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST);
   }
 
-  render(project, camera, selection = new Set(), componentSelection = null, preview = null) {
+  render(project, camera, selection = new Set(), componentSelection = null, preview = null, subtraction = null) {
     this.resize();
     const { gl } = this;
     const { projection, view } = this.getMatrices(camera);
@@ -667,14 +667,23 @@ export class Renderer {
     }
     for (const entity of allRenderableEntities(project)) {
       const model = entityWorldMatrix(project, entity);
+      let parent = entity;
+      const visited = new Set();
+      while (parent.parentId && !visited.has(parent.id)) {
+        visited.add(parent.id);
+        const next = project.entities.find((candidate) => candidate.id === parent.parentId);
+        if (!next) break;
+        parent = next;
+      }
+      const pickColor = parent.id === subtraction?.targetId ? [0.17, 0.75, 0.37] : parent.id === subtraction?.cutterId ? [0.9, 0.24, 0.28] : null;
       if (entity.kind === "mesh") {
         const material = project.materials.find((candidate) => candidate.id === entity.materialId) ?? project.materials[0];
         const entityComponentSelections = componentSelection?.type === "multi"
           ? componentSelection.components.filter((component) => component.entityId === entity.id)
           : componentSelection?.entityId === entity.id ? [componentSelection] : [];
-        this.drawMesh(entity, material, model, product, project.settings, selection.has(entity.id), entityComponentSelections, section);
+        this.drawMesh(entity, material, model, product, project.settings, selection.has(entity.id), entityComponentSelections, section, pickColor);
       } else if (project.settings.viewMode !== "solid" && (entity.kind === "edge" || entity.kind === "annotation")) {
-        this.drawEntityLine(entity, model, product, selection.has(entity.id), appearance);
+        this.drawEntityLine(entity, model, product, selection.has(entity.id), pickColor ? { ...appearance, edgeColor: `#${pickColor.map((value) => Math.round(value * 255).toString(16).padStart(2, "0")).join("")}` } : appearance);
       }
     }
     if (xray) {

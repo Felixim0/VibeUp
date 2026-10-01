@@ -198,6 +198,7 @@ const app = {
   paletteOffset: { x: 26, y: 148 },
   selectionClick: null,
   snap: null,
+  keyboardPoint: null,
   lastCanvasPointer: null,
   controlHeld: false,
   preparingPushPull: false,
@@ -401,6 +402,7 @@ const snapshot = () => ({
 
 const resetTransientToolState = () => {
   app.pending = null;
+  app.keyboardPoint = null;
   app.interaction = null;
   app.preparingPushPull = false;
   hideGeometryBusy();
@@ -844,6 +846,26 @@ const rawPointOnPlane = (event, planePoint, planeNormal) => {
 
 const snapTolerance = () => Math.max(1, app.camera.distance * 0.018);
 
+const connectedLineEndpoint = (event, surface) => {
+  if (!app.renderMatrices) return null;
+  const pointer = getPointer(event);
+  const matrices = app.camera.getMatrices(app.renderer.width / app.renderer.height);
+  let best = null;
+  for (const entity of allRenderableEntities(app.project)) {
+    if (entity.kind !== "edge") continue;
+    const points = lineWorldPoints(app.project, entity);
+    for (let index = 0; index < points.length; index += 3) {
+      const point = points.slice(index, index + 3);
+      if (Math.abs(dot3(subtract3(point, surface.point), surface.normal)) > 0.02) continue;
+      const projected = projectPoint(point, app.renderer.width, app.renderer.height, matrices.projection, matrices.view);
+      if (!projected || projected[2] < -1 || projected[2] > 1) continue;
+      const distance = Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y) / app.renderer.pixelRatio;
+      if (distance <= 20 && (!best || distance < best.distance)) best = { point, distance, kind: "endpoint", label: "connected line endpoint", surface };
+    }
+  }
+  return best;
+};
+
 const nearestPointOnSegment = (point, start, end) => {
   const segment = subtract3(end, start);
   const lengthSquared = dot3(segment, segment);
@@ -917,13 +939,16 @@ const closestSnap = (rawPoint, surface, options = {}) => {
     if (Math.abs(dot3(subtract3(point, surface.point), surface.normal)) > tolerance * 0.05) {
       return;
     }
+    let pixelDistance = 0;
     if (pointer) {
       const projected = projectPoint(point, app.renderer.width, app.renderer.height, matrices.projection, matrices.view);
-      if (!projected || projected[2] < -1 || projected[2] > 1 || Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y) > 12 * app.renderer.pixelRatio) return;
+      pixelDistance = projected ? Math.hypot(projected[0] - pointer.x, projected[1] - pointer.y) / app.renderer.pixelRatio : Infinity;
+      if (!projected || projected[2] < -1 || projected[2] > 1 || pixelDistance > 18) return;
     }
-    const priority = ["vertex", "endpoint", "midpoint"].includes(kind) ? 0.7 : 1;
-    if (distance <= tolerance && (!best || distance * priority < best.distance * best.priority)) {
-      best = { point, kind, label, distance, priority, line, surface: surfaceForPoint(point, surface) };
+    const priority = kind === "vertex" || kind === "endpoint" ? 0.35 : kind === "midpoint" ? 0.6 : 1;
+    const score = pointer ? pixelDistance * priority : distance * priority;
+    if (distance <= tolerance && (!best || score < best.score)) {
+      best = { point, kind, label, distance, score, line, surface: surfaceForPoint(point, surface) };
     }
   };
 
@@ -1033,7 +1058,8 @@ const updateSnapIndicator = () => {
       guide.style.transform = `rotate(${-Math.atan2(dx, dy)}rad)`;
     } else guide.hidden = true;
   } else guide.hidden = true;
-  const snap = app.controlHeld ? (app.lastCanvasPointer ? controlLineSnap(app.lastCanvasPointer) : null) : app.snap;
+  const snap = app.keyboardPoint ? { point: app.keyboardPoint, kind: "keyboard", label: "keyboard point" } :
+    app.controlHeld ? (app.lastCanvasPointer ? controlLineSnap(app.lastCanvasPointer) : null) : app.snap;
   if (!snap || !app.renderMatrices) {
     elements.snapIndicator.hidden = true;
     return;
@@ -1048,6 +1074,7 @@ const updateSnapIndicator = () => {
   elements.snapIndicator.classList.toggle("inferred", snap.kind === "inference");
   elements.snapIndicator.classList.toggle("vertex-snap", !app.controlHeld && ["vertex", "endpoint", "midpoint"].includes(snap.kind));
   elements.snapIndicator.classList.toggle("control-snap", app.controlHeld);
+  elements.snapIndicator.classList.toggle("keyboard-snap", Boolean(app.keyboardPoint));
   elements.snapIndicator.classList.toggle("match-target", snap.kind === "match-target");
   elements.snapIndicator.style.left = `${projected[0] / app.renderer.pixelRatio}px`;
   elements.snapIndicator.style.top = `${projected[1] / app.renderer.pixelRatio}px`;
@@ -1709,7 +1736,7 @@ const requestRender = () => {
   window.requestAnimationFrame(() => {
     app.renderScheduled = false;
     const preview = currentPreview();
-    app.renderMatrices = app.renderer.render(app.project, app.camera, app.selection, app.componentSelection, preview);
+    app.renderMatrices = app.renderer.render(app.project, app.camera, app.selection, app.componentSelection, preview, app.subtractPick);
     renderAnnotations();
     updateSnapIndicator();
   });
@@ -1881,7 +1908,10 @@ const activateSidePanel = (panelId) => {
 };
 
 const setTool = (tool) => {
-  if (tool !== "select") app.subtractPick = null;
+  if (tool !== "select" && app.subtractPick) {
+    app.subtractPick = null;
+    requestRender();
+  }
   cancelPushPullPreview();
   if (app.interaction?.kind === "rotate-guide") {
     restoreSnapshot(app.interaction.before);
@@ -2081,6 +2111,8 @@ const appendOutlinerRows = (fragment, ids, depth = 0) => {
       continue;
     }
     const row = element("div", { className: `outliner-row${app.selection.has(id) ? " selected" : ""}` });
+    row.classList.toggle("takeaway-main", app.subtractPick?.targetId === entity.id);
+    row.classList.toggle("takeaway-cutter", app.subtractPick?.cutterId === entity.id);
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const visible = element("button", { className: "row-button", text: entity.visible ? "o" : "-", type: "button", title: "Toggle visibility" });
     visible.addEventListener("click", (event) => {
@@ -3129,9 +3161,7 @@ const groupSelection = () => {
     const byMesh = new Map();
     const touched = new Set(components.map((component) => component.entityId));
     if (entities.some((entity) => entity.locked)) throw new Error("Unlock the selected objects before grouping.");
-    if (entities.some((entity) => entity.parentId && !entities.some((candidate) => candidate.id === entity.parentId))) {
-      throw new Error("Explode the group before regrouping its members.");
-    }
+    if (entities.some((entity) => containingGroup(entity))) throw new Error("Explode the group before regrouping its members.");
     for (const component of components) {
       if (component.type === "line") {
         const entity = getEntity(app.project, component.entityId);
@@ -3164,12 +3194,13 @@ const groupSelection = () => {
     else members.push(...entities.filter((entity) => getEntity(app.project, entity.id) && (entity.kind === "group" || !touched.has(entity.id))).map((entity) => entity.id));
     if (!members.length) throw new Error("Select faces or lines before grouping.");
     const group = makeGroup(app.project, [...new Set(members)]);
+    if (!group) throw new Error("Select unlocked geometry to create a group.");
     app.renderer.invalidate();
     return group;
   });
   if (group) {
     setSelection([group.id]);
-    setStatus("Created group.");
+    setStatus("Created group. Its faces and lines now move together.");
   }
 };
 
@@ -3190,7 +3221,8 @@ const explodeSelectedGroup = () => {
 const makeSubtract = () => {
   clearSelection();
   setTool("select");
-  app.subtractPick = { stage: "target", targetId: null };
+  app.subtractPick = { stage: "target", targetId: null, cutterId: null };
+  requestRender();
   setStatus("Take Away: select the main object (first group). Click a group in the viewport or Outliner.");
 };
 
@@ -3200,37 +3232,54 @@ const chooseSubtractGroup = (group) => {
     setStatus(`Take Away: select ${pick?.stage === "cutter" ? "the object to subtract" : "the main object"} as a group.`, "warning");
     return;
   }
+  if (group.locked) {
+    setStatus("Unlock the group before using Take Away.", "warning");
+    return;
+  }
   if (pick.stage === "target") {
     pick.stage = "cutter";
     pick.targetId = group.id;
-    setSelection([group.id]);
+    setSelection([]);
+    updatePanels();
+    requestRender();
     setStatus("Take Away: select the object to subtract (second group).");
     return;
   }
+  if (pick.cutterId) return;
   const target = getEntity(app.project, pick.targetId);
   if (!target || target.id === group.id) {
     setStatus("Select a different group to subtract from the main object.", "warning");
     return;
   }
-  try {
-    const mainSolid = groupSolidMesh(app.project, target);
-    const cutterSolid = groupSolidMesh(app.project, group);
-    validateSubtractInputs(app.project, mainSolid, cutterSolid);
-    const output = subtractMeshes(app.project, mainSolid, cutterSolid);
-    const result = mutate("Take away group", () => {
-      removeEntity(app.project, target.id);
-      removeEntity(app.project, group.id);
-      addEntity(app.project, output);
-      app.renderer.invalidate();
-      return output;
-    });
-    if (!result) return;
-    app.subtractPick = null;
-    setSelection([result.id]);
-    setStatus(`Took away ${group.name} from ${target.name}.`);
-  } catch (error) {
-    setStatus(error.message, "warning");
-  }
+  pick.cutterId = group.id;
+  updatePanels();
+  requestRender();
+  showGeometryBusy("Taking away group…");
+  void afterBusyPaint(() => {
+    if (app.subtractPick !== pick || pick.cutterId !== group.id) return;
+    try {
+      const mainSolid = groupSolidMesh(app.project, target);
+      const cutterSolid = groupSolidMesh(app.project, group);
+      validateSubtractInputs(app.project, mainSolid, cutterSolid);
+      const output = subtractMeshes(app.project, mainSolid, cutterSolid);
+      const result = mutate("Take away group", () => {
+        removeEntity(app.project, target.id);
+        removeEntity(app.project, group.id);
+        addEntity(app.project, output);
+        app.renderer.invalidate();
+        return output;
+      });
+      if (!result) return;
+      app.subtractPick = null;
+      setSelection([result.id]);
+      setStatus(`Took away ${group.name} from ${target.name}.`);
+    } catch (error) {
+      pick.cutterId = null;
+      updatePanels();
+      requestRender();
+      setStatus(error.message, "warning");
+    }
+  }).finally(hideGeometryBusy);
 };
 
 const reverseSelectedFaces = () => {
@@ -3353,6 +3402,24 @@ const createLine = (start, end, surface = null) => {
     throw new Error("A line needs non-zero length.");
   }
   return mutate("Draw line", () => {
+    if (surface?.entityId && containingGroup(getEntity(app.project, surface.entityId))) {
+      throw new Error("Explode the group before drawing on an individual face.");
+    }
+    const canonicalEndpoint = (point) => {
+      let nearest = null;
+      for (const entity of allRenderableEntities(app.project)) {
+        if (entity.kind !== "edge") continue;
+        const points = lineWorldPoints(app.project, entity);
+        for (let index = 0; index < points.length; index += 3) {
+          const candidate = points.slice(index, index + 3);
+          const distance = distance3(candidate, point);
+          if (distance < 0.02 && (!nearest || distance < nearest.distance)) nearest = { point: candidate, distance };
+        }
+      }
+      return nearest?.point ?? point;
+    };
+    start = canonicalEndpoint(start);
+    end = canonicalEndpoint(end);
     const host = surface?.entityId ? getEntity(app.project, surface.entityId) : null;
     if (host?.kind === "mesh" && !host.locked && Number.isInteger(surface.triangleIndex) && surface.triangleIndex < host.indices.length / 3) {
       const face = getMeshFaceRegion(app.project, host, surface.triangleIndex);
@@ -3967,9 +4034,10 @@ const drawingPointForEvent = (event) => {
     const faceNormal = hit?.normal ?? null;
     const sameFace = hit?.entity.id === activeSurface.entityId && faceNormal && Math.abs(dot3(faceNormal, activeSurface.normal)) > 0.999;
     const raw = sameFace ? hit.point : rawPoint;
-    const snap = event.shiftKey && app.activeTool === "line"
+    const snap = app.activeTool === "line" && !event.shiftKey ? connectedLineEndpoint(event, activeSurface) : null;
+    const resolved = snap ?? (event.shiftKey && app.activeTool === "line"
       ? { point: raw, kind: "inference", label: "locked drawing plane", surface: activeSurface }
-      : resolvedSnapPoint(event, raw, activeSurface);
+      : resolvedSnapPoint(event, raw, activeSurface));
     if (app.activeTool === "line" && !event.shiftKey) {
       const candidate = lineStartSnap(event, activeSurface);
       if (candidate) {
@@ -3978,15 +4046,16 @@ const drawingPointForEvent = (event) => {
       }
     }
     app.linePlaneLocked = event.shiftKey && app.activeTool === "line";
-    app.snap = snap;
-    return { point: snap.point, surface: app.pending.surface };
+    app.snap = resolved;
+    return { point: resolved.point, surface: app.pending.surface };
   }
   const hit = pickEntity(event);
   if (hit?.entity.kind === "mesh" && hit.point && hit.normal) {
     const surface = drawingSurfaceFromHit(hit);
-    const snap = resolvedSnapPoint(event, app.activeTool === "line" ? hit.point : snapPointOnSurface(hit.point, surface), surface);
-    app.snap = snap;
-    return { point: snap.point, surface };
+    const snap = app.activeTool === "line" ? connectedLineEndpoint(event, surface) : null;
+    const resolved = snap ?? resolvedSnapPoint(event, app.activeTool === "line" ? hit.point : snapPointOnSurface(hit.point, surface), surface);
+    app.snap = resolved;
+    return { point: resolved.point, surface };
   }
   const lineSurface = app.activeTool === "line" ? surfaceAtMeshOpening(event) : null;
   if (lineSurface) {
@@ -4002,7 +4071,7 @@ const drawingPointForEvent = (event) => {
   if (!rawPoint) {
     return null;
   }
-  const snap = resolvedSnapPoint(event, rawPoint, surface);
+  const snap = app.activeTool === "line" ? connectedLineEndpoint(event, surface) ?? resolvedSnapPoint(event, rawPoint, surface) : resolvedSnapPoint(event, rawPoint, surface);
   app.snap = snap;
   return { point: snap.point, surface };
 };
@@ -4319,6 +4388,14 @@ const selectFilteredClick = (event) => {
 };
 
 const handlePointerDown = (event) => {
+  if (app.keyboardPoint && app.activeTool === "line" && event.button === 0 && !event.altKey) {
+    const point = app.keyboardPoint;
+    const surface = app.pending?.surface ?? { point, normal: [0, 0, 1] };
+    app.keyboardPoint = null;
+    handleDrawingClick(event, point, surface);
+    return;
+  }
+  app.keyboardPoint = null;
   elements.canvas.focus({ preventScroll: true });
   app.lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY };
   if (event.button === 2 || event.altKey) {
@@ -4567,6 +4644,7 @@ const handlePointerDown = (event) => {
 
 const handlePointerMove = (event) => {
   app.lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY };
+  if (app.keyboardPoint && !app.interaction) return;
   const pointer = getPointer(event);
   const interaction = app.interaction;
   if (!interaction) {
@@ -4820,6 +4898,7 @@ const handlePointerUp = (event) => {
 
 const cancelActiveOperation = () => {
   app.subtractPick = null;
+  requestRender();
   if (cancelPushPullPreview()) {
     setTool("select");
     setStatus("Operation cancelled.");
@@ -5005,7 +5084,7 @@ const bindInterface = () => {
   window.addEventListener("keyup", (event) => {
     if (event.key === "Control") {
       app.controlHeld = false;
-      if (app.lastCanvasPointer && document.activeElement === elements.canvas && !app.interaction) snapHoverPoint({ ...app.lastCanvasPointer, ctrlKey: false });
+      if (!app.keyboardPoint && app.lastCanvasPointer && document.activeElement === elements.canvas && !app.interaction) snapHoverPoint({ ...app.lastCanvasPointer, ctrlKey: false });
       requestRender();
     }
     if (event.key === "Shift") {
@@ -5111,6 +5190,21 @@ const handleKeyboard = (event) => {
   const target = event.target;
   const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
   const key = event.key.toLowerCase();
+  if (!editingText && ["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+    event.preventDefault();
+    const step = Math.max(0.001, Number(app.project.settings.snapIncrement) || 1);
+    const basis = app.keyboardPoint ?? app.snap?.point ?? app.pending?.points?.[0] ?? app.camera.target;
+    const delta = event.ctrlKey
+      ? [0, 0, (key === "arrowup" || key === "arrowright" ? 1 : -1) * step]
+      : [key === "arrowright" ? step : key === "arrowleft" ? -step : 0,
+        key === "arrowup" ? step : key === "arrowdown" ? -step : 0, 0];
+    app.keyboardPoint = add3(basis, delta);
+    app.snap = { point: app.keyboardPoint, kind: "keyboard", label: "keyboard point" };
+    if (app.pending?.tool === "line") app.hoverPoint = app.keyboardPoint;
+    setStatus(`Selection point: ${app.keyboardPoint.map((value) => formatNumber(value)).join(", ")} mm. Arrows move X/Y; Ctrl+arrows move Z.`);
+    requestRender();
+    return;
+  }
   if (event.metaKey || event.ctrlKey) {
     if (!editingText && (key === "c" || key === "v")) {
       event.preventDefault();
@@ -5165,7 +5259,7 @@ const handleKeyboard = (event) => {
     return;
   }
   if (event.key === "Control") {
-    lockInference();
+    if (!app.keyboardPoint) lockInference();
   }
   if (event.key === "Shift" && app.pending?.tool === "line") {
     app.linePlaneLocked = true;
